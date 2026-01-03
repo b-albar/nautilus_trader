@@ -29,7 +29,11 @@ from nautilus_trader.adapters.eodhd.enums import EodhdIntradayInterval
 from nautilus_trader.common.component import Logger
 from nautilus_trader.model.data import Bar
 from nautilus_trader.model.data import BarType
+from nautilus_trader.model.data import TradeTick
+from nautilus_trader.model.enums import AggressorSide
 from nautilus_trader.model.enums import BarAggregation
+from nautilus_trader.model.identifiers import InstrumentId
+from nautilus_trader.model.identifiers import TradeId
 from nautilus_trader.model.objects import Price
 from nautilus_trader.model.objects import Quantity
 
@@ -320,3 +324,114 @@ class EodhdHttpClient:
             bars.append(bar)
 
         return bars
+
+    async def get_tick_data(
+        self,
+        symbol: str,
+        start_timestamp: int | None = None,
+        end_timestamp: int | None = None,
+        limit: int | None = None,
+    ) -> dict:
+        """
+        Get historical trade tick data for a US equity symbol.
+
+        Note: This API only works for US stocks.
+
+        Parameters
+        ----------
+        symbol : str
+            The symbol (e.g., "AAPL"). US exchange is assumed.
+        start_timestamp : int, optional
+            The start Unix timestamp in seconds.
+        end_timestamp : int, optional
+            The end Unix timestamp in seconds.
+        limit : int, optional
+            Maximum number of ticks to return.
+
+        Returns
+        -------
+        dict
+            Raw tick data with columnar format:
+            - mkt: market where trade took place
+            - price: transaction prices
+            - seq: trade sequence numbers
+            - shares: shares in transactions
+            - sl: sales conditions
+            - ts: timestamps (milliseconds)
+            - sub_mkt: sub-market identifiers
+
+        """
+        params = {}
+        params["s"] = symbol  # Symbol (US exchange assumed)
+
+        if start_timestamp:
+            params["from"] = str(start_timestamp)
+        if end_timestamp:
+            params["to"] = str(end_timestamp)
+        if limit:
+            params["limit"] = str(limit)
+
+        endpoint = "/ticks/"
+        return await self._request(endpoint, params)
+
+    def parse_tick_data(
+        self,
+        data: dict | list,
+        instrument_id: InstrumentId,
+        price_precision: int = 2,
+        size_precision: int = 0,
+    ) -> list[TradeTick]:
+        """
+        Parse EODHD tick data into Nautilus TradeTick objects.
+
+        Parameters
+        ----------
+        data : dict | list
+            The raw tick data from the API (columnar format).
+            Returns empty list if no data available.
+        instrument_id : InstrumentId
+            The instrument ID for the ticks.
+        price_precision : int, default 2
+            The price precision.
+        size_precision : int, default 0
+            The size precision.
+
+        Returns
+        -------
+        list[TradeTick]
+            List of Nautilus TradeTick objects.
+
+        """
+        from decimal import Decimal
+
+        ticks = []
+
+        # Handle empty response (API returns [] when no data available)
+        if isinstance(data, list):
+            return ticks
+
+        # EODHD returns columnar data as dict
+        prices = data.get("price", [])
+        shares = data.get("shares", [])
+        timestamps = data.get("ts", [])  # Milliseconds
+        sequence_nums = data.get("seq", [])
+
+        for i in range(len(prices)):
+            # Timestamp is in milliseconds, convert to nanoseconds
+            ts_ns = int(timestamps[i]) * 1_000_000
+
+            # Use sequence number as trade ID
+            trade_id = TradeId(str(sequence_nums[i]))
+
+            tick = TradeTick(
+                instrument_id=instrument_id,
+                price=Price(Decimal(str(prices[i])), price_precision),
+                size=Quantity(Decimal(str(shares[i])), size_precision),
+                aggressor_side=AggressorSide.NO_AGGRESSOR,  # EODHD doesn't provide this
+                trade_id=trade_id,
+                ts_event=ts_ns,
+                ts_init=ts_ns,
+            )
+            ticks.append(tick)
+
+        return ticks

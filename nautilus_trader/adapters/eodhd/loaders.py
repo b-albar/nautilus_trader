@@ -30,6 +30,7 @@ from nautilus_trader.adapters.eodhd.enums import EodhdIntradayInterval
 from nautilus_trader.adapters.eodhd.http_client import EodhdHttpClient
 from nautilus_trader.model.data import Bar
 from nautilus_trader.model.data import BarType
+from nautilus_trader.model.data import TradeTick
 from nautilus_trader.model.enums import BarAggregation
 from nautilus_trader.model.enums import PriceType
 from nautilus_trader.model.identifiers import InstrumentId
@@ -47,6 +48,7 @@ class EodhdDataLoader:
     Supports:
     - End-of-day (EOD) bar data (daily, weekly, monthly)
     - Intraday bar data (1m, 5m, 1h)
+    - Trade tick data for US equities
 
     Parameters
     ----------
@@ -461,6 +463,134 @@ class EodhdDataLoader:
                 output[instrument_id] = result
 
         return output
+
+    def load_ticks(
+        self,
+        symbol: str,
+        start_timestamp: int | datetime | None = None,
+        end_timestamp: int | datetime | None = None,
+        limit: int | None = None,
+        price_precision: int = 2,
+        size_precision: int = 0,
+    ) -> list[TradeTick]:
+        """
+        Load trade tick data from EODHD API.
+
+        Note: This API only works for US equities.
+
+        Parameters
+        ----------
+        symbol : str
+            The symbol (e.g., "AAPL"). US exchange is assumed.
+        start_timestamp : int or datetime, optional
+            The start timestamp (Unix seconds or datetime).
+        end_timestamp : int or datetime, optional
+            The end timestamp (Unix seconds or datetime).
+        limit : int, optional
+            Maximum number of ticks to return.
+        price_precision : int, default 2
+            The price precision for the ticks.
+        size_precision : int, default 0
+            The size precision for the ticks.
+
+        Returns
+        -------
+        list[TradeTick]
+            List of Nautilus TradeTick objects.
+
+        Examples
+        --------
+        >>> from datetime import datetime
+        >>> ticks = loader.load_ticks(
+        ...     symbol="AAPL",
+        ...     start_timestamp=datetime(2024, 1, 2, 9, 30),
+        ...     end_timestamp=datetime(2024, 1, 2, 10, 0),
+        ...     limit=10000,
+        ... )
+
+        """
+        # Convert datetime to Unix timestamp if needed
+        if isinstance(start_timestamp, datetime):
+            start_timestamp = int(start_timestamp.timestamp())
+        if isinstance(end_timestamp, datetime):
+            end_timestamp = int(end_timestamp.timestamp())
+
+        # Create instrument ID for US equity
+        instrument_id = InstrumentId(Symbol(symbol), Venue("US"))
+
+        raw_data = self._run_async(
+            self._http_client.get_tick_data(
+                symbol=symbol,
+                start_timestamp=start_timestamp,
+                end_timestamp=end_timestamp,
+                limit=limit,
+            )
+        )
+
+        return self._http_client.parse_tick_data(
+            raw_data,
+            instrument_id,
+            price_precision=price_precision,
+            size_precision=size_precision,
+        )
+
+    async def load_ticks_async(
+        self,
+        symbol: str,
+        start_timestamp: int | datetime | None = None,
+        end_timestamp: int | datetime | None = None,
+        limit: int | None = None,
+        price_precision: int = 2,
+        size_precision: int = 0,
+    ) -> list[TradeTick]:
+        """
+        Async version of load_ticks.
+
+        Note: This API only works for US equities.
+
+        Parameters
+        ----------
+        symbol : str
+            The symbol (e.g., "AAPL"). US exchange is assumed.
+        start_timestamp : int or datetime, optional
+            The start timestamp (Unix seconds or datetime).
+        end_timestamp : int or datetime, optional
+            The end timestamp (Unix seconds or datetime).
+        limit : int, optional
+            Maximum number of ticks to return.
+        price_precision : int, default 2
+            The price precision for the ticks.
+        size_precision : int, default 0
+            The size precision for the ticks.
+
+        Returns
+        -------
+        list[TradeTick]
+            List of Nautilus TradeTick objects.
+
+        """
+        # Convert datetime to Unix timestamp if needed
+        if isinstance(start_timestamp, datetime):
+            start_timestamp = int(start_timestamp.timestamp())
+        if isinstance(end_timestamp, datetime):
+            end_timestamp = int(end_timestamp.timestamp())
+
+        # Create instrument ID for US equity
+        instrument_id = InstrumentId(Symbol(symbol), Venue("US"))
+
+        raw_data = await self._http_client.get_tick_data(
+            symbol=symbol,
+            start_timestamp=start_timestamp,
+            end_timestamp=end_timestamp,
+            limit=limit,
+        )
+
+        return self._http_client.parse_tick_data(
+            raw_data,
+            instrument_id,
+            price_precision=price_precision,
+            size_precision=size_precision,
+        )
 
     def close(self) -> None:
         """Close the HTTP client and cleanup resources."""
