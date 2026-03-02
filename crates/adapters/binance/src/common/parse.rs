@@ -23,9 +23,10 @@ use std::str::FromStr;
 use anyhow::Context;
 use nautilus_core::nanos::UnixNanos;
 use nautilus_model::{
-    data::{Bar, BarType, TradeTick},
+    data::{Bar, BarSpecification, BarType, TradeTick},
     enums::{
-        AggressorSide, LiquiditySide, OrderSide, OrderStatus, OrderType, TimeInForce, TriggerType,
+        AggressorSide, BarAggregation, LiquiditySide, OrderSide, OrderStatus, OrderType,
+        TimeInForce, TriggerType,
     },
     identifiers::{
         AccountId, ClientOrderId, InstrumentId, OrderListId, Symbol, TradeId, Venue, VenueOrderId,
@@ -42,7 +43,7 @@ use serde_json::Value;
 
 use crate::{
     common::{
-        enums::BinanceContractStatus,
+        enums::{BinanceContractStatus, BinanceKlineInterval, BinanceTradingStatus},
         fixed::{mantissa_to_price, mantissa_to_quantity},
         sbe::spot::{
             order_side::OrderSide as SbeOrderSide, order_status::OrderStatus as SbeOrderStatus,
@@ -51,8 +52,8 @@ use crate::{
     },
     futures::http::models::{BinanceFuturesCoinSymbol, BinanceFuturesUsdSymbol},
     spot::http::models::{
-        BinanceAccountTrade, BinanceKlines, BinanceNewOrderResponse, BinanceOrderResponse,
-        BinanceSymbolSbe, BinanceTrades,
+        BinanceAccountTrade, BinanceKlines, BinanceLotSizeFilterSbe, BinanceNewOrderResponse,
+        BinanceOrderResponse, BinancePriceFilterSbe, BinanceSymbolSbe, BinanceTrades,
     },
 };
 
@@ -118,6 +119,14 @@ pub fn parse_usdm_instrument(
         );
     }
 
+    if symbol.status != BinanceTradingStatus::Trading {
+        anyhow::bail!(
+            "Symbol '{}' is not trading (status: {:?})",
+            symbol.symbol,
+            symbol.status
+        );
+    }
+
     let base_currency = get_currency(symbol.base_asset.as_str());
     let quote_currency = get_currency(symbol.quote_asset.as_str());
     let settlement_currency = get_currency(symbol.margin_asset.as_str());
@@ -132,6 +141,12 @@ pub fn parse_usdm_instrument(
         .context("Missing PRICE_FILTER in symbol filters")?;
 
     let tick_size = parse_filter_price(price_filter, "tickSize")?;
+    if tick_size.is_zero() {
+        anyhow::bail!(
+            "Invalid tickSize of 0 for symbol '{}', cannot create instrument",
+            symbol.symbol,
+        );
+    }
     let max_price = parse_filter_price(price_filter, "maxPrice").ok();
     let min_price = parse_filter_price(price_filter, "minPrice").ok();
 
@@ -168,6 +183,7 @@ pub fn parse_usdm_instrument(
         Some(default_margin),
         None, // maker_fee
         None, // taker_fee
+        None, // info
         ts_event,
         ts_init,
     );
@@ -224,6 +240,12 @@ pub fn parse_coinm_instrument(
         .context("Missing PRICE_FILTER in symbol filters")?;
 
     let tick_size = parse_filter_price(price_filter, "tickSize")?;
+    if tick_size.is_zero() {
+        anyhow::bail!(
+            "Invalid tickSize of 0 for symbol '{}', cannot create instrument",
+            symbol.symbol,
+        );
+    }
     let max_price = parse_filter_price(price_filter, "maxPrice").ok();
     let min_price = parse_filter_price(price_filter, "minPrice").ok();
 
@@ -263,6 +285,7 @@ pub fn parse_coinm_instrument(
         Some(default_margin),
         None, // maker_fee
         None, // taker_fee
+        None, // info
         ts_event,
         ts_init,
     );
@@ -272,6 +295,68 @@ pub fn parse_coinm_instrument(
 
 /// SBE status value for Trading.
 const SBE_STATUS_TRADING: u8 = 0;
+
+/// Parses an SBE price filter into tick_size, max_price, min_price.
+fn parse_sbe_price_filter(
+    filter: &BinancePriceFilterSbe,
+) -> anyhow::Result<(Price, Option<Price>, Option<Price>)> {
+    let precision = (-filter.price_exponent).max(0) as u8;
+
+    let tick_size = mantissa_to_price(filter.tick_size, filter.price_exponent, precision);
+
+    let max_price = if filter.max_price != 0 {
+        Some(mantissa_to_price(
+            filter.max_price,
+            filter.price_exponent,
+            precision,
+        ))
+    } else {
+        None
+    };
+
+    let min_price = if filter.min_price != 0 {
+        Some(mantissa_to_price(
+            filter.min_price,
+            filter.price_exponent,
+            precision,
+        ))
+    } else {
+        None
+    };
+
+    Ok((tick_size, max_price, min_price))
+}
+
+/// Parses an SBE lot size filter into step_size, max_qty, min_qty.
+fn parse_sbe_lot_size_filter(
+    filter: &BinanceLotSizeFilterSbe,
+) -> anyhow::Result<(Quantity, Option<Quantity>, Option<Quantity>)> {
+    let precision = (-filter.qty_exponent).max(0) as u8;
+
+    let step_size = mantissa_to_quantity(filter.step_size, filter.qty_exponent, precision);
+
+    let max_qty = if filter.max_qty != 0 {
+        Some(mantissa_to_quantity(
+            filter.max_qty,
+            filter.qty_exponent,
+            precision,
+        ))
+    } else {
+        None
+    };
+
+    let min_qty = if filter.min_qty != 0 {
+        Some(mantissa_to_quantity(
+            filter.min_qty,
+            filter.qty_exponent,
+            precision,
+        ))
+    } else {
+        None
+    };
+
+    Ok((step_size, max_qty, min_qty))
+}
 
 /// Parses a Binance Spot SBE symbol into a Nautilus CurrencyPair instrument.
 ///
@@ -303,19 +388,21 @@ pub fn parse_spot_instrument_sbe(
     );
     let raw_symbol = Symbol::new(&symbol.symbol);
 
-    let price_filter = get_filter(&symbol.filters, "PRICE_FILTER")
+    let price_filter = symbol
+        .filters
+        .price_filter
+        .as_ref()
         .context("Missing PRICE_FILTER in symbol filters")?;
 
-    let tick_size = parse_filter_price(price_filter, "tickSize")?;
-    let max_price = parse_filter_price(price_filter, "maxPrice").ok();
-    let min_price = parse_filter_price(price_filter, "minPrice").ok();
+    let (tick_size, max_price, min_price) = parse_sbe_price_filter(price_filter)?;
 
-    let lot_filter =
-        get_filter(&symbol.filters, "LOT_SIZE").context("Missing LOT_SIZE in symbol filters")?;
+    let lot_filter = symbol
+        .filters
+        .lot_size_filter
+        .as_ref()
+        .context("Missing LOT_SIZE in symbol filters")?;
 
-    let step_size = parse_filter_quantity(lot_filter, "stepSize")?;
-    let max_quantity = parse_filter_quantity(lot_filter, "maxQty").ok();
-    let min_quantity = parse_filter_quantity(lot_filter, "minQty").ok();
+    let (step_size, max_quantity, min_quantity) = parse_sbe_lot_size_filter(lot_filter)?;
 
     // Spot has no leverage, use 1.0 margin
     let default_margin = Decimal::new(1, 0);
@@ -341,6 +428,7 @@ pub fn parse_spot_instrument_sbe(
         Some(default_margin),
         None, // maker_fee
         None, // taker_fee
+        None, // info
         ts_event,
         ts_init,
     );
@@ -564,18 +652,23 @@ pub fn parse_order_status_report_sbe(
     if let Some(p) = price {
         report = report.with_price(p);
     }
+
     if let Some(ap) = avg_px {
         report = report.with_avg_px(ap.as_f64())?;
     }
+
     if let Some(tp) = trigger_price {
         report = report.with_trigger_price(tp);
     }
+
     if let Some(tt) = trigger_type {
         report = report.with_trigger_type(tt);
     }
+
     if let Some(oli) = order_list_id {
         report = report.with_order_list_id(oli);
     }
+
     if post_only {
         report = report.with_post_only(true);
     }
@@ -696,18 +789,23 @@ pub fn parse_new_order_response_sbe(
     if let Some(p) = price {
         report = report.with_price(p);
     }
+
     if let Some(ap) = avg_px {
         report = report.with_avg_px(ap.as_f64())?;
     }
+
     if let Some(tp) = trigger_price {
         report = report.with_trigger_price(tp);
     }
+
     if let Some(tt) = trigger_type {
         report = report.with_trigger_type(tt);
     }
+
     if let Some(oli) = order_list_id {
         report = report.with_order_list_id(oli);
     }
+
     if post_only {
         report = report.with_post_only(true);
     }
@@ -811,6 +909,56 @@ pub fn parse_klines_to_bars(
     Ok(bars)
 }
 
+/// Converts a Nautilus bar specification to a Binance kline interval.
+///
+/// # Errors
+///
+/// Returns an error if the bar specification does not map to a supported
+/// Binance kline interval.
+pub fn bar_spec_to_binance_interval(
+    bar_spec: BarSpecification,
+) -> anyhow::Result<BinanceKlineInterval> {
+    let step = bar_spec.step.get();
+    let interval = match bar_spec.aggregation {
+        BarAggregation::Second => {
+            anyhow::bail!("Binance Spot does not support second-level kline intervals")
+        }
+        BarAggregation::Minute => match step {
+            1 => BinanceKlineInterval::Minute1,
+            3 => BinanceKlineInterval::Minute3,
+            5 => BinanceKlineInterval::Minute5,
+            15 => BinanceKlineInterval::Minute15,
+            30 => BinanceKlineInterval::Minute30,
+            _ => anyhow::bail!("Unsupported minute interval: {step}m"),
+        },
+        BarAggregation::Hour => match step {
+            1 => BinanceKlineInterval::Hour1,
+            2 => BinanceKlineInterval::Hour2,
+            4 => BinanceKlineInterval::Hour4,
+            6 => BinanceKlineInterval::Hour6,
+            8 => BinanceKlineInterval::Hour8,
+            12 => BinanceKlineInterval::Hour12,
+            _ => anyhow::bail!("Unsupported hour interval: {step}h"),
+        },
+        BarAggregation::Day => match step {
+            1 => BinanceKlineInterval::Day1,
+            3 => BinanceKlineInterval::Day3,
+            _ => anyhow::bail!("Unsupported day interval: {step}d"),
+        },
+        BarAggregation::Week => match step {
+            1 => BinanceKlineInterval::Week1,
+            _ => anyhow::bail!("Unsupported week interval: {step}w"),
+        },
+        BarAggregation::Month => match step {
+            1 => BinanceKlineInterval::Month1,
+            _ => anyhow::bail!("Unsupported month interval: {step}M"),
+        },
+        agg => anyhow::bail!("Unsupported bar aggregation for Binance: {agg:?}"),
+    };
+
+    Ok(interval)
+}
+
 #[cfg(test)]
 mod tests {
     use rstest::rstest;
@@ -882,7 +1030,7 @@ mod tests {
                 assert_eq!(perp.price_increment, Price::from_str("0.10").unwrap());
                 assert_eq!(perp.size_increment, Quantity::from_str("0.001").unwrap());
             }
-            other => panic!("Expected CryptoPerpetual, got {other:?}"),
+            other => panic!("Expected CryptoPerpetual, was {other:?}"),
         }
     }
 
@@ -921,5 +1069,90 @@ mod tests {
                 .to_string()
                 .contains("Missing PRICE_FILTER")
         );
+    }
+
+    mod bar_spec_tests {
+        use std::num::NonZeroUsize;
+
+        use nautilus_model::{
+            data::BarSpecification,
+            enums::{BarAggregation, PriceType},
+        };
+
+        use super::*;
+        use crate::common::enums::BinanceKlineInterval;
+
+        fn make_bar_spec(step: usize, aggregation: BarAggregation) -> BarSpecification {
+            BarSpecification {
+                step: NonZeroUsize::new(step).unwrap(),
+                aggregation,
+                price_type: PriceType::Last,
+            }
+        }
+
+        #[rstest]
+        #[case(1, BarAggregation::Minute, BinanceKlineInterval::Minute1)]
+        #[case(3, BarAggregation::Minute, BinanceKlineInterval::Minute3)]
+        #[case(5, BarAggregation::Minute, BinanceKlineInterval::Minute5)]
+        #[case(15, BarAggregation::Minute, BinanceKlineInterval::Minute15)]
+        #[case(30, BarAggregation::Minute, BinanceKlineInterval::Minute30)]
+        #[case(1, BarAggregation::Hour, BinanceKlineInterval::Hour1)]
+        #[case(2, BarAggregation::Hour, BinanceKlineInterval::Hour2)]
+        #[case(4, BarAggregation::Hour, BinanceKlineInterval::Hour4)]
+        #[case(6, BarAggregation::Hour, BinanceKlineInterval::Hour6)]
+        #[case(8, BarAggregation::Hour, BinanceKlineInterval::Hour8)]
+        #[case(12, BarAggregation::Hour, BinanceKlineInterval::Hour12)]
+        #[case(1, BarAggregation::Day, BinanceKlineInterval::Day1)]
+        #[case(3, BarAggregation::Day, BinanceKlineInterval::Day3)]
+        #[case(1, BarAggregation::Week, BinanceKlineInterval::Week1)]
+        #[case(1, BarAggregation::Month, BinanceKlineInterval::Month1)]
+        fn test_bar_spec_to_binance_interval(
+            #[case] step: usize,
+            #[case] aggregation: BarAggregation,
+            #[case] expected: BinanceKlineInterval,
+        ) {
+            let bar_spec = make_bar_spec(step, aggregation);
+            let result = bar_spec_to_binance_interval(bar_spec).unwrap();
+            assert_eq!(result, expected);
+        }
+
+        #[rstest]
+        fn test_unsupported_second_interval() {
+            let bar_spec = make_bar_spec(1, BarAggregation::Second);
+            let result = bar_spec_to_binance_interval(bar_spec);
+            assert!(result.is_err());
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("does not support second-level")
+            );
+        }
+
+        #[rstest]
+        fn test_unsupported_minute_interval() {
+            let bar_spec = make_bar_spec(7, BarAggregation::Minute);
+            let result = bar_spec_to_binance_interval(bar_spec);
+            assert!(result.is_err());
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("Unsupported minute interval")
+            );
+        }
+
+        #[rstest]
+        fn test_unsupported_aggregation() {
+            let bar_spec = make_bar_spec(100, BarAggregation::Tick);
+            let result = bar_spec_to_binance_interval(bar_spec);
+            assert!(result.is_err());
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("Unsupported bar aggregation")
+            );
+        }
     }
 }

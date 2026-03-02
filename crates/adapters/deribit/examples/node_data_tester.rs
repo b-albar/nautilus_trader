@@ -14,11 +14,13 @@
 // -------------------------------------------------------------------------------------------------
 
 //! Example demonstrating live data testing with the Deribit adapter.
+//!
+//! Run with: `cargo run --example deribit-data-tester --package nautilus-deribit`
 
 use nautilus_common::enums::Environment;
 use nautilus_deribit::{
     config::DeribitDataClientConfig, factories::DeribitDataClientFactory,
-    http::models::DeribitInstrumentKind,
+    http::models::DeribitProductType,
 };
 use nautilus_live::node::LiveNode;
 use nautilus_model::{
@@ -43,7 +45,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let deribit_config = DeribitDataClientConfig {
         api_key: None,    // Will use 'DERIBIT_API_KEY' env var
         api_secret: None, // Will use 'DERIBIT_API_SECRET' env var
-        instrument_kinds: vec![DeribitInstrumentKind::Future],
+        product_types: vec![DeribitProductType::Future],
         use_testnet: false,
         ..Default::default()
     };
@@ -64,9 +66,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ];
 
     let tester_config = DataTesterConfig::new(client_id, instrument_ids)
+        .with_subscribe_quotes(true)
+        .with_subscribe_trades(true)
+        .with_subscribe_index_prices(true)
+        .with_subscribe_mark_prices(true)
+        .with_subscribe_instrument_status(true)
         .with_bar_types(bar_types)
         .with_subscribe_bars(true)
+        .with_request_trades(true)
+        .with_request_bars(true)
         .with_log_data(true);
+
     let tester = DataTester::new(tester_config);
 
     node.add_actor(tester)?;

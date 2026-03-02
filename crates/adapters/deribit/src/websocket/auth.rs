@@ -19,6 +19,7 @@ use std::time::Duration;
 
 use nautilus_common::live::get_runtime;
 use nautilus_core::{UUID4, time::get_atomic_clock_realtime};
+use tokio_util::sync::CancellationToken;
 
 use super::{
     handler::HandlerCommand,
@@ -26,8 +27,11 @@ use super::{
 };
 use crate::common::credential::Credential;
 
-/// Default session name for Deribit WebSocket authentication.
-pub const DEFAULT_SESSION_NAME: &str = "nautilus";
+/// Session name for Deribit WebSocket data client authentication.
+pub const DERIBIT_DATA_SESSION_NAME: &str = "nautilus-data";
+
+/// Session name for Deribit WebSocket execution client authentication.
+pub const DERIBIT_EXECUTION_SESSION_NAME: &str = "nautilus-execution";
 
 /// Authentication state storing OAuth tokens.
 #[derive(Debug, Clone)]
@@ -99,7 +103,7 @@ pub fn send_auth_request(
 
     let auth_params = DeribitAuthParams {
         grant_type: "client_signature".to_string(),
-        client_id: credential.api_key.to_string(),
+        client_id: credential.api_key().to_string(),
         timestamp,
         signature,
         nonce,
@@ -119,23 +123,32 @@ pub fn send_auth_request(
 /// The task sleeps until 80% of the token lifetime has passed, then sends a refresh request.
 /// When the refresh succeeds, a new `Authenticated` message will be received, which triggers
 /// another refresh task - creating a continuous refresh cycle.
+///
+/// The `cancel_token` allows the caller to cancel a stale refresh task when a new
+/// authentication cycle begins (e.g., after reconnection re-auth).
 pub fn spawn_token_refresh_task(
     expires_in: u64,
     refresh_token: String,
     cmd_tx: tokio::sync::mpsc::UnboundedSender<HandlerCommand>,
+    cancel_token: CancellationToken,
 ) {
     // Refresh at 80% of token lifetime to ensure we never expire
     let refresh_delay_secs = (expires_in as f64 * 0.8) as u64;
 
     get_runtime().spawn(async move {
-        tracing::debug!(
-            "Token refresh scheduled in {}s (token expires in {}s)",
-            refresh_delay_secs,
-            expires_in
+        log::debug!(
+            "Token refresh scheduled in {refresh_delay_secs}s (token expires in {expires_in}s)"
         );
-        tokio::time::sleep(Duration::from_secs(refresh_delay_secs)).await;
 
-        tracing::info!("Refreshing authentication token...");
+        tokio::select! {
+            () = tokio::time::sleep(Duration::from_secs(refresh_delay_secs)) => {}
+            () = cancel_token.cancelled() => {
+                log::debug!("Token refresh task cancelled");
+                return;
+            }
+        }
+
+        log::debug!("Refreshing authentication token...");
         let refresh_params = DeribitRefreshTokenParams {
             grant_type: "refresh_token".to_string(),
             refresh_token,

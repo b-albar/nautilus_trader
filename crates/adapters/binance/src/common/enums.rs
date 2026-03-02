@@ -17,7 +17,7 @@
 
 use std::fmt::Display;
 
-use nautilus_model::enums::{OrderSide, TimeInForce};
+use nautilus_model::enums::{OrderSide, OrderType, TimeInForce};
 use serde::{Deserialize, Serialize};
 
 /// Binance product type identifier.
@@ -28,7 +28,12 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 #[cfg_attr(
     feature = "python",
-    pyo3::pyclass(module = "nautilus_trader.core.nautilus_pyo3.binance", eq)
+    pyo3::pyclass(
+        module = "nautilus_trader.core.nautilus_pyo3.binance",
+        eq,
+        from_py_object,
+        rename_all = "SCREAMING_SNAKE_CASE"
+    )
 )]
 pub enum BinanceProductType {
     /// Spot trading (api.binance.com).
@@ -110,7 +115,12 @@ impl Display for BinanceProductType {
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(
     feature = "python",
-    pyo3::pyclass(module = "nautilus_trader.core.nautilus_pyo3.binance", eq)
+    pyo3::pyclass(
+        module = "nautilus_trader.core.nautilus_pyo3.binance",
+        eq,
+        from_py_object,
+        rename_all = "SCREAMING_SNAKE_CASE"
+    )
 )]
 pub enum BinanceEnvironment {
     /// Production/mainnet environment.
@@ -118,6 +128,8 @@ pub enum BinanceEnvironment {
     Mainnet,
     /// Testnet environment.
     Testnet,
+    /// Demo trading environment.
+    Demo,
 }
 
 impl BinanceEnvironment {
@@ -125,6 +137,12 @@ impl BinanceEnvironment {
     #[must_use]
     pub const fn is_testnet(self) -> bool {
         matches!(self, Self::Testnet)
+    }
+
+    /// Returns true for any non-production environment.
+    #[must_use]
+    pub const fn is_sandbox(self) -> bool {
+        matches!(self, Self::Testnet | Self::Demo)
     }
 }
 
@@ -150,9 +168,26 @@ impl TryFrom<OrderSide> for BinanceSide {
     }
 }
 
+impl From<BinanceSide> for OrderSide {
+    fn from(value: BinanceSide) -> Self {
+        match value {
+            BinanceSide::Buy => Self::Buy,
+            BinanceSide::Sell => Self::Sell,
+        }
+    }
+}
+
 /// Position side for dual-side position mode.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "UPPERCASE")]
+#[cfg_attr(
+    feature = "python",
+    pyo3::pyclass(
+        module = "nautilus_trader.core.nautilus_pyo3.binance",
+        eq,
+        from_py_object
+    )
+)]
 pub enum BinancePositionSide {
     /// Single position mode (both).
     Both,
@@ -216,6 +251,47 @@ pub enum BinanceOrderStatus {
     Unknown,
 }
 
+/// Algo order status lifecycle values (Binance Futures Algo Service).
+///
+/// These statuses are specific to conditional orders submitted via the
+/// `/fapi/v1/algoOrder` endpoint (STOP_MARKET, STOP_LIMIT, TAKE_PROFIT,
+/// TAKE_PROFIT_MARKET, TRAILING_STOP_MARKET).
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum BinanceAlgoStatus {
+    /// Algo order accepted and waiting for trigger condition.
+    New,
+    /// Algo order trigger condition met, forwarding to matching engine.
+    Triggering,
+    /// Algo order successfully placed in matching engine.
+    Triggered,
+    /// Algo order lifecycle completed (check executed qty for fill status).
+    Finished,
+    /// Algo order canceled by user.
+    Canceled,
+    /// Algo order expired (GTD expiration).
+    Expired,
+    /// Algo order rejected by exchange.
+    Rejected,
+    /// Unknown or undocumented value.
+    #[serde(other)]
+    Unknown,
+}
+
+/// Algo order type for Binance Futures Algo Service.
+///
+/// Currently only `Conditional` is supported by Binance.
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum BinanceAlgoType {
+    /// Conditional algo order (stop, take-profit, trailing stop).
+    #[default]
+    Conditional,
+    /// Unknown or undocumented value.
+    #[serde(other)]
+    Unknown,
+}
+
 /// Futures order type enumeration.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -241,6 +317,23 @@ pub enum BinanceFuturesOrderType {
     /// Unknown or undocumented value.
     #[serde(other)]
     Unknown,
+}
+
+impl From<BinanceFuturesOrderType> for OrderType {
+    fn from(value: BinanceFuturesOrderType) -> Self {
+        match value {
+            BinanceFuturesOrderType::Limit => Self::Limit,
+            BinanceFuturesOrderType::Market => Self::Market,
+            BinanceFuturesOrderType::Stop => Self::StopLimit,
+            BinanceFuturesOrderType::StopMarket => Self::StopMarket,
+            BinanceFuturesOrderType::TakeProfit => Self::LimitIfTouched,
+            BinanceFuturesOrderType::TakeProfitMarket => Self::MarketIfTouched,
+            BinanceFuturesOrderType::TrailingStopMarket => Self::TrailingStopMarket,
+            BinanceFuturesOrderType::Liquidation
+            | BinanceFuturesOrderType::Adl
+            | BinanceFuturesOrderType::Unknown => Self::Market, // Exchange-generated orders
+        }
+    }
 }
 
 /// Time in force options.
@@ -415,6 +508,27 @@ pub enum BinanceWsEventType {
     /// 24-hour rolling mini ticker event.
     #[serde(rename = "24hrMiniTicker")]
     MiniTicker24Hr,
+
+    // User data stream events
+    /// Account update (balance and position changes).
+    #[serde(rename = "ACCOUNT_UPDATE")]
+    AccountUpdate,
+    /// Order/trade update event.
+    #[serde(rename = "ORDER_TRADE_UPDATE")]
+    OrderTradeUpdate,
+    /// Algo order update event (Binance Futures Algo Service).
+    #[serde(rename = "ALGO_UPDATE")]
+    AlgoUpdate,
+    /// Margin call warning event.
+    #[serde(rename = "MARGIN_CALL")]
+    MarginCall,
+    /// Account configuration update (leverage change).
+    #[serde(rename = "ACCOUNT_CONFIG_UPDATE")]
+    AccountConfigUpdate,
+    /// Listen key expired event.
+    #[serde(rename = "listenKeyExpired")]
+    ListenKeyExpired,
+
     /// Unknown or undocumented event type.
     #[serde(other)]
     Unknown,
@@ -434,6 +548,12 @@ impl BinanceWsEventType {
             Self::ForceOrder => "forceOrder",
             Self::Ticker24Hr => "24hrTicker",
             Self::MiniTicker24Hr => "24hrMiniTicker",
+            Self::AccountUpdate => "ACCOUNT_UPDATE",
+            Self::OrderTradeUpdate => "ORDER_TRADE_UPDATE",
+            Self::AlgoUpdate => "ALGO_UPDATE",
+            Self::MarginCall => "MARGIN_CALL",
+            Self::AccountConfigUpdate => "ACCOUNT_CONFIG_UPDATE",
+            Self::ListenKeyExpired => "listenKeyExpired",
             Self::Unknown => "unknown",
         }
     }
@@ -487,6 +607,7 @@ impl Display for BinanceEnvironment {
         match self {
             Self::Mainnet => write!(f, "Mainnet"),
             Self::Testnet => write!(f, "Testnet"),
+            Self::Demo => write!(f, "Demo"),
         }
     }
 }
@@ -561,6 +682,31 @@ pub enum BinanceKlineInterval {
     /// 1 month.
     #[serde(rename = "1M")]
     Month1,
+}
+
+impl BinanceKlineInterval {
+    /// Returns the string representation used by Binance API.
+    #[must_use]
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::Second1 => "1s",
+            Self::Minute1 => "1m",
+            Self::Minute3 => "3m",
+            Self::Minute5 => "5m",
+            Self::Minute15 => "15m",
+            Self::Minute30 => "30m",
+            Self::Hour1 => "1h",
+            Self::Hour2 => "2h",
+            Self::Hour4 => "4h",
+            Self::Hour6 => "6h",
+            Self::Hour8 => "8h",
+            Self::Hour12 => "12h",
+            Self::Day1 => "1d",
+            Self::Day3 => "3d",
+            Self::Week1 => "1w",
+            Self::Month1 => "1M",
+        }
+    }
 }
 
 #[cfg(test)]

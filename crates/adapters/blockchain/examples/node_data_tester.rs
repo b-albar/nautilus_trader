@@ -13,6 +13,10 @@
 //  limitations under the License.
 // -------------------------------------------------------------------------------------------------
 
+//! Example demonstrating live data testing with the Blockchain adapter.
+//!
+//! Run with: `cargo run --example blockchain-data-tester --package nautilus-blockchain`
+
 use std::{
     ops::{Deref, DerefMut},
     sync::Arc,
@@ -41,7 +45,7 @@ use nautilus_model::{
 
 // Requires capnp installed on the machine
 // Run with `cargo run -p nautilus-blockchain --bin node_test --features hypersync`
-// To see additional tracing logs `export RUST_LOG=debug,h2=off`
+// To enable debug logging: `export NAUTILUS_LOG=debug`
 
 // IMPORTANT: The actor definitions below are EXAMPLE CODE for demonstration purposes.
 // They should NOT be moved to the main library as they are specific to this test scenario.
@@ -104,7 +108,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 #[derive(Debug, Clone)]
 #[cfg_attr(
     feature = "python",
-    pyo3::pyclass(module = "nautilus_trader.core.nautilus_pyo3.blockchain")
+    pyo3::pyclass(
+        module = "nautilus_trader.core.nautilus_pyo3.blockchain",
+        from_py_object
+    )
 )]
 pub struct BlockchainSubscriberActorConfig {
     /// Base data actor configuration.

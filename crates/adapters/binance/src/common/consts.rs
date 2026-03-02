@@ -15,9 +15,11 @@
 
 //! Binance venue constants and API endpoints.
 
-use std::sync::LazyLock;
+use std::{num::NonZeroU32, sync::LazyLock};
 
 use nautilus_model::identifiers::Venue;
+use nautilus_network::ratelimiter::quota::Quota;
+use ustr::Ustr;
 
 use super::enums::{BinanceRateLimitInterval, BinanceRateLimitType};
 
@@ -26,10 +28,6 @@ pub const BINANCE: &str = "BINANCE";
 
 /// Static venue instance for Binance.
 pub static BINANCE_VENUE: LazyLock<Venue> = LazyLock::new(|| Venue::new(BINANCE));
-
-// ------------------------------------------------------------------------------------------------
-// HTTP Base URLs - Mainnet
-// ------------------------------------------------------------------------------------------------
 
 /// Binance Spot API base URL (mainnet).
 pub const BINANCE_SPOT_HTTP_URL: &str = "https://api.binance.com";
@@ -43,10 +41,6 @@ pub const BINANCE_FUTURES_COIN_HTTP_URL: &str = "https://dapi.binance.com";
 /// Binance European Options API base URL (mainnet).
 pub const BINANCE_OPTIONS_HTTP_URL: &str = "https://eapi.binance.com";
 
-// ------------------------------------------------------------------------------------------------
-// HTTP Base URLs - Testnet
-// ------------------------------------------------------------------------------------------------
-
 /// Binance Spot API base URL (testnet).
 pub const BINANCE_SPOT_TESTNET_HTTP_URL: &str = "https://testnet.binance.vision";
 
@@ -56,11 +50,11 @@ pub const BINANCE_FUTURES_USD_TESTNET_HTTP_URL: &str = "https://testnet.binancef
 /// Binance COIN-M Futures API base URL (testnet).
 pub const BINANCE_FUTURES_COIN_TESTNET_HTTP_URL: &str = "https://testnet.binancefuture.com";
 
-// Note: Binance Options testnet is not publicly available
+/// Binance Spot API base URL (demo).
+pub const BINANCE_SPOT_DEMO_HTTP_URL: &str = "https://demo-api.binance.com";
 
-// ------------------------------------------------------------------------------------------------
-// WebSocket URLs - Mainnet
-// ------------------------------------------------------------------------------------------------
+/// Binance Futures API base URL (demo, same as futures testnet).
+pub const BINANCE_FUTURES_DEMO_HTTP_URL: &str = "https://testnet.binancefuture.com";
 
 /// Binance Spot WebSocket base URL (mainnet).
 pub const BINANCE_SPOT_WS_URL: &str = "wss://stream.binance.com:9443/ws";
@@ -74,22 +68,32 @@ pub const BINANCE_FUTURES_COIN_WS_URL: &str = "wss://dstream.binance.com/ws";
 /// Binance European Options WebSocket base URL (mainnet).
 pub const BINANCE_OPTIONS_WS_URL: &str = "wss://nbstream.binance.com/eoptions";
 
-// ------------------------------------------------------------------------------------------------
-// WebSocket URLs - Testnet
-// ------------------------------------------------------------------------------------------------
+/// Binance Spot SBE WebSocket stream URL (mainnet).
+pub const BINANCE_SPOT_SBE_WS_URL: &str = "wss://stream-sbe.binance.com/ws";
+
+/// Binance Spot SBE WebSocket API URL (mainnet).
+pub const BINANCE_SPOT_SBE_WS_API_URL: &str =
+    "wss://ws-api.binance.com:443/ws-api/v3?responseFormat=sbe&sbeSchemaId=3&sbeSchemaVersion=2";
+
+/// Binance Spot SBE WebSocket API URL (testnet).
+pub const BINANCE_SPOT_SBE_WS_API_TESTNET_URL: &str =
+    "wss://testnet.binance.vision/ws-api/v3?responseFormat=sbe&sbeSchemaId=3&sbeSchemaVersion=2";
+
+/// Binance Spot SBE WebSocket API URL (demo).
+pub const BINANCE_SPOT_SBE_WS_API_DEMO_URL: &str =
+    "wss://demo-ws-api.binance.com/ws-api/v3?responseFormat=sbe&sbeSchemaId=3&sbeSchemaVersion=2";
 
 /// Binance Spot WebSocket base URL (testnet).
-pub const BINANCE_SPOT_TESTNET_WS_URL: &str = "wss://testnet.binance.vision/ws";
+pub const BINANCE_SPOT_TESTNET_WS_URL: &str = "wss://stream.testnet.binance.vision/ws";
+
+/// Binance Spot WebSocket base URL (demo).
+pub const BINANCE_SPOT_DEMO_WS_URL: &str = "wss://demo-stream.binance.com/ws";
 
 /// Binance USD-M Futures WebSocket base URL (testnet).
 pub const BINANCE_FUTURES_USD_TESTNET_WS_URL: &str = "wss://stream.binancefuture.com/ws";
 
 /// Binance COIN-M Futures WebSocket base URL (testnet).
 pub const BINANCE_FUTURES_COIN_TESTNET_WS_URL: &str = "wss://dstream.binancefuture.com/ws";
-
-// ------------------------------------------------------------------------------------------------
-// API Paths
-// ------------------------------------------------------------------------------------------------
 
 /// Binance Spot API version path.
 pub const BINANCE_SPOT_API_PATH: &str = "/api/v3";
@@ -102,10 +106,6 @@ pub const BINANCE_DAPI_PATH: &str = "/dapi/v1";
 
 /// Binance European Options API version path.
 pub const BINANCE_EAPI_PATH: &str = "/eapi/v1";
-
-// ------------------------------------------------------------------------------------------------
-// Rate Limiting
-// ------------------------------------------------------------------------------------------------
 
 /// Describes a static rate limit quota for a product type.
 #[derive(Clone, Copy, Debug)]
@@ -219,3 +219,25 @@ pub const BINANCE_EAPI_RATE_LIMITS: &[BinanceRateLimitQuota] = &[
         limit: 200,
     },
 ];
+
+/// WebSocket subscription rate limit: 5 messages per second.
+///
+/// Binance limits incoming WebSocket messages (subscribe/unsubscribe) to 5 per second.
+pub static BINANCE_WS_SUBSCRIPTION_QUOTA: LazyLock<Quota> = LazyLock::new(|| {
+    Quota::per_second(NonZeroU32::new(5).expect("non-zero")).expect("valid constant")
+});
+
+/// WebSocket connection rate limit: 1 per second (conservative).
+///
+/// Binance limits connections to 300 per 5 minutes per IP. This conservative quota
+/// of 1 per second helps avoid hitting the connection limit during reconnection storms.
+pub static BINANCE_WS_CONNECTION_QUOTA: LazyLock<Quota> = LazyLock::new(|| {
+    Quota::per_second(NonZeroU32::new(1).expect("non-zero")).expect("valid constant")
+});
+
+/// Pre-interned rate limit key for WebSocket subscription operations.
+pub static BINANCE_RATE_LIMIT_KEY_SUBSCRIPTION: LazyLock<[Ustr; 1]> =
+    LazyLock::new(|| [Ustr::from("subscription")]);
+
+/// Valid order book depth levels for Binance.
+pub const BINANCE_BOOK_DEPTHS: [u32; 7] = [5, 10, 20, 50, 100, 500, 1000];
