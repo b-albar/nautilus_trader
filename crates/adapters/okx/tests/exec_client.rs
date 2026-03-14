@@ -23,7 +23,6 @@ use nautilus_core::{UUID4, UnixNanos, time::get_atomic_clock_realtime};
 use nautilus_live::ExecutionEventEmitter;
 use nautilus_model::{
     enums::{AccountType, LiquiditySide, OrderSide, OrderStatus, OrderType, TimeInForce},
-    events::{OrderAccepted, OrderTriggered},
     identifiers::{
         AccountId, ClientId, ClientOrderId, InstrumentId, StrategyId, TradeId, TraderId,
         VenueOrderId,
@@ -31,13 +30,11 @@ use nautilus_model::{
     reports::{FillReport, OrderStatusReport},
     types::{Currency, Money, Price, Quantity},
 };
-use nautilus_okx::{
-    execution::{WsDispatchState, dispatch_ws_message},
-    websocket::messages::{ExecutionReport, NautilusWsMessage},
+use nautilus_okx::websocket::{
+    dispatch::{WsDispatchState, dispatch_execution_reports},
+    messages::ExecutionReport,
 };
 use rstest::rstest;
-
-// -- Test helpers -----------------------------------------------------------
 
 fn test_emitter() -> (
     ExecutionEventEmitter,
@@ -54,36 +51,6 @@ fn test_emitter() -> (
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
     emitter.set_sender(tx);
     (emitter, rx)
-}
-
-fn make_order_accepted(cid: &str) -> OrderAccepted {
-    OrderAccepted::new(
-        TraderId::from("TESTER-001"),
-        StrategyId::from("S-001"),
-        InstrumentId::from("ETH-USDT-SWAP.OKX"),
-        ClientOrderId::new(cid),
-        VenueOrderId::new("v-1"),
-        AccountId::from("OKX-001"),
-        UUID4::default(),
-        UnixNanos::default(),
-        UnixNanos::default(),
-        false,
-    )
-}
-
-fn make_order_triggered(cid: &str) -> OrderTriggered {
-    OrderTriggered::new(
-        TraderId::from("TESTER-001"),
-        StrategyId::from("S-001"),
-        InstrumentId::from("ETH-USDT-SWAP.OKX"),
-        ClientOrderId::new(cid),
-        UUID4::default(),
-        UnixNanos::default(),
-        UnixNanos::default(),
-        false,
-        Some(VenueOrderId::new("v-1")),
-        Some(AccountId::from("OKX-001")),
-    )
 }
 
 fn make_fill_report(cid: &str) -> FillReport {
@@ -133,8 +100,6 @@ fn drain_events(
     }
     events
 }
-
-// -- BatchCancelOrders tests ------------------------------------------------
 
 #[rstest]
 fn test_batch_cancel_orders_builds_payload() {
@@ -217,32 +182,36 @@ fn test_batch_cancel_orders_with_empty_cancels() {
     assert_eq!(payload.len(), 0);
 }
 
-// -- dispatch_ws_message: baseline pass-through --------------------------------
-
 #[rstest]
 fn test_dispatch_order_accepted_passes_through() {
     let (emitter, mut rx) = test_emitter();
     let state = WsDispatchState::default();
-    let msg = NautilusWsMessage::OrderAccepted(make_order_accepted("O-001"));
+    let reports = vec![ExecutionReport::Order(make_order_status_report(
+        "O-001",
+        OrderStatus::Accepted,
+    ))];
 
-    dispatch_ws_message(msg, &emitter, &state);
+    dispatch_execution_reports(reports, &emitter, &state);
 
     let events = drain_events(&mut rx);
     assert_eq!(events.len(), 1);
-    assert!(matches!(events[0], ExecutionEvent::Order(_)));
+    assert!(matches!(events[0], ExecutionEvent::Report(_)));
 }
 
 #[rstest]
 fn test_dispatch_order_triggered_passes_through() {
     let (emitter, mut rx) = test_emitter();
     let state = WsDispatchState::default();
-    let msg = NautilusWsMessage::OrderTriggered(make_order_triggered("O-001"));
+    let reports = vec![ExecutionReport::Order(make_order_status_report(
+        "O-001",
+        OrderStatus::Triggered,
+    ))];
 
-    dispatch_ws_message(msg, &emitter, &state);
+    dispatch_execution_reports(reports, &emitter, &state);
 
     let events = drain_events(&mut rx);
     assert_eq!(events.len(), 1);
-    assert!(matches!(events[0], ExecutionEvent::Order(_)));
+    assert!(matches!(events[0], ExecutionEvent::Report(_)));
     assert!(
         state
             .triggered_orders
@@ -254,10 +223,9 @@ fn test_dispatch_order_triggered_passes_through() {
 fn test_dispatch_fill_report_passes_through() {
     let (emitter, mut rx) = test_emitter();
     let state = WsDispatchState::default();
-    let msg =
-        NautilusWsMessage::ExecutionReports(vec![ExecutionReport::Fill(make_fill_report("O-001"))]);
+    let reports = vec![ExecutionReport::Fill(make_fill_report("O-001"))];
 
-    dispatch_ws_message(msg, &emitter, &state);
+    dispatch_execution_reports(reports, &emitter, &state);
 
     let events = drain_events(&mut rx);
     assert_eq!(events.len(), 1);
@@ -269,17 +237,16 @@ fn test_dispatch_fill_report_passes_through() {
 fn test_dispatch_order_status_report_accepted_passes_through() {
     let (emitter, mut rx) = test_emitter();
     let state = WsDispatchState::default();
-    let msg = NautilusWsMessage::ExecutionReports(vec![ExecutionReport::Order(
-        make_order_status_report("O-001", OrderStatus::Accepted),
-    )]);
+    let reports = vec![ExecutionReport::Order(make_order_status_report(
+        "O-001",
+        OrderStatus::Accepted,
+    ))];
 
-    dispatch_ws_message(msg, &emitter, &state);
+    dispatch_execution_reports(reports, &emitter, &state);
 
     let events = drain_events(&mut rx);
     assert_eq!(events.len(), 1);
 }
-
-// -- OrderAccepted dedup ----------------------------------------------------
 
 #[rstest]
 fn test_dispatch_order_accepted_skipped_when_already_triggered() {
@@ -287,8 +254,11 @@ fn test_dispatch_order_accepted_skipped_when_already_triggered() {
     let state = WsDispatchState::default();
     state.triggered_orders.insert(ClientOrderId::new("O-001"));
 
-    let msg = NautilusWsMessage::OrderAccepted(make_order_accepted("O-001"));
-    dispatch_ws_message(msg, &emitter, &state);
+    let reports = vec![ExecutionReport::Order(make_order_status_report(
+        "O-001",
+        OrderStatus::Accepted,
+    ))];
+    dispatch_execution_reports(reports, &emitter, &state);
 
     let events = drain_events(&mut rx);
     assert_eq!(events.len(), 0);
@@ -300,14 +270,15 @@ fn test_dispatch_order_accepted_skipped_when_already_filled() {
     let state = WsDispatchState::default();
     state.filled_orders.insert(ClientOrderId::new("O-001"));
 
-    let msg = NautilusWsMessage::OrderAccepted(make_order_accepted("O-001"));
-    dispatch_ws_message(msg, &emitter, &state);
+    let reports = vec![ExecutionReport::Order(make_order_status_report(
+        "O-001",
+        OrderStatus::Accepted,
+    ))];
+    dispatch_execution_reports(reports, &emitter, &state);
 
     let events = drain_events(&mut rx);
     assert_eq!(events.len(), 0);
 }
-
-// -- OrderTriggered dedup ---------------------------------------------------
 
 #[rstest]
 fn test_dispatch_order_triggered_skipped_when_already_filled() {
@@ -315,14 +286,15 @@ fn test_dispatch_order_triggered_skipped_when_already_filled() {
     let state = WsDispatchState::default();
     state.filled_orders.insert(ClientOrderId::new("O-001"));
 
-    let msg = NautilusWsMessage::OrderTriggered(make_order_triggered("O-001"));
-    dispatch_ws_message(msg, &emitter, &state);
+    let reports = vec![ExecutionReport::Order(make_order_status_report(
+        "O-001",
+        OrderStatus::Triggered,
+    ))];
+    dispatch_execution_reports(reports, &emitter, &state);
 
     let events = drain_events(&mut rx);
     assert_eq!(events.len(), 0);
 }
-
-// -- OrderStatusReport dedup ------------------------------------------------
 
 #[rstest]
 fn test_dispatch_status_report_accepted_skipped_when_triggered() {
@@ -330,10 +302,11 @@ fn test_dispatch_status_report_accepted_skipped_when_triggered() {
     let state = WsDispatchState::default();
     state.triggered_orders.insert(ClientOrderId::new("O-001"));
 
-    let msg = NautilusWsMessage::ExecutionReports(vec![ExecutionReport::Order(
-        make_order_status_report("O-001", OrderStatus::Accepted),
-    )]);
-    dispatch_ws_message(msg, &emitter, &state);
+    let reports = vec![ExecutionReport::Order(make_order_status_report(
+        "O-001",
+        OrderStatus::Accepted,
+    ))];
+    dispatch_execution_reports(reports, &emitter, &state);
 
     let events = drain_events(&mut rx);
     assert_eq!(events.len(), 0);
@@ -345,10 +318,11 @@ fn test_dispatch_status_report_accepted_skipped_when_filled() {
     let state = WsDispatchState::default();
     state.filled_orders.insert(ClientOrderId::new("O-001"));
 
-    let msg = NautilusWsMessage::ExecutionReports(vec![ExecutionReport::Order(
-        make_order_status_report("O-001", OrderStatus::Accepted),
-    )]);
-    dispatch_ws_message(msg, &emitter, &state);
+    let reports = vec![ExecutionReport::Order(make_order_status_report(
+        "O-001",
+        OrderStatus::Accepted,
+    ))];
+    dispatch_execution_reports(reports, &emitter, &state);
 
     let events = drain_events(&mut rx);
     assert_eq!(events.len(), 0);
@@ -360,26 +334,26 @@ fn test_dispatch_status_report_triggered_skipped_when_filled() {
     let state = WsDispatchState::default();
     state.filled_orders.insert(ClientOrderId::new("O-001"));
 
-    let msg = NautilusWsMessage::ExecutionReports(vec![ExecutionReport::Order(
-        make_order_status_report("O-001", OrderStatus::Triggered),
-    )]);
-    dispatch_ws_message(msg, &emitter, &state);
+    let reports = vec![ExecutionReport::Order(make_order_status_report(
+        "O-001",
+        OrderStatus::Triggered,
+    ))];
+    dispatch_execution_reports(reports, &emitter, &state);
 
     let events = drain_events(&mut rx);
     assert_eq!(events.len(), 0);
 }
-
-// -- OrderStatusReport state recording --------------------------------------
 
 #[rstest]
 fn test_dispatch_status_report_triggered_records_state() {
     let (emitter, mut rx) = test_emitter();
     let state = WsDispatchState::default();
 
-    let msg = NautilusWsMessage::ExecutionReports(vec![ExecutionReport::Order(
-        make_order_status_report("O-001", OrderStatus::Triggered),
-    )]);
-    dispatch_ws_message(msg, &emitter, &state);
+    let reports = vec![ExecutionReport::Order(make_order_status_report(
+        "O-001",
+        OrderStatus::Triggered,
+    ))];
+    dispatch_execution_reports(reports, &emitter, &state);
 
     let events = drain_events(&mut rx);
     assert_eq!(events.len(), 1);
@@ -395,17 +369,16 @@ fn test_dispatch_status_report_filled_records_state() {
     let (emitter, mut rx) = test_emitter();
     let state = WsDispatchState::default();
 
-    let msg = NautilusWsMessage::ExecutionReports(vec![ExecutionReport::Order(
-        make_order_status_report("O-001", OrderStatus::Filled),
-    )]);
-    dispatch_ws_message(msg, &emitter, &state);
+    let reports = vec![ExecutionReport::Order(make_order_status_report(
+        "O-001",
+        OrderStatus::Filled,
+    ))];
+    dispatch_execution_reports(reports, &emitter, &state);
 
     let events = drain_events(&mut rx);
     assert_eq!(events.len(), 1);
     assert!(state.filled_orders.contains(&ClientOrderId::new("O-001")));
 }
-
-// -- Cross-order isolation --------------------------------------------------
 
 #[rstest]
 fn test_dispatch_dedup_does_not_affect_different_orders() {
@@ -413,14 +386,15 @@ fn test_dispatch_dedup_does_not_affect_different_orders() {
     let state = WsDispatchState::default();
     state.filled_orders.insert(ClientOrderId::new("O-001"));
 
-    let msg = NautilusWsMessage::OrderAccepted(make_order_accepted("O-002"));
-    dispatch_ws_message(msg, &emitter, &state);
+    let reports = vec![ExecutionReport::Order(make_order_status_report(
+        "O-002",
+        OrderStatus::Accepted,
+    ))];
+    dispatch_execution_reports(reports, &emitter, &state);
 
     let events = drain_events(&mut rx);
     assert_eq!(events.len(), 1);
 }
-
-// -- Full lifecycle ---------------------------------------------------------
 
 #[rstest]
 fn test_dispatch_full_lifecycle_stale_accepted_skipped() {
@@ -428,31 +402,38 @@ fn test_dispatch_full_lifecycle_stale_accepted_skipped() {
     let state = WsDispatchState::default();
 
     // 1. Triggered arrives first (from business WS)
-    dispatch_ws_message(
-        NautilusWsMessage::ExecutionReports(vec![ExecutionReport::Order(
-            make_order_status_report("O-001", OrderStatus::Triggered),
-        )]),
+    dispatch_execution_reports(
+        vec![ExecutionReport::Order(make_order_status_report(
+            "O-001",
+            OrderStatus::Triggered,
+        ))],
         &emitter,
         &state,
     );
 
     // 2. Fill arrives (from private WS)
-    dispatch_ws_message(
-        NautilusWsMessage::ExecutionReports(vec![ExecutionReport::Fill(make_fill_report("O-001"))]),
+    dispatch_execution_reports(
+        vec![ExecutionReport::Fill(make_fill_report("O-001"))],
         &emitter,
         &state,
     );
 
     // 3. Stale Accepted arrives late (from private WS)
-    dispatch_ws_message(
-        NautilusWsMessage::OrderAccepted(make_order_accepted("O-001")),
+    dispatch_execution_reports(
+        vec![ExecutionReport::Order(make_order_status_report(
+            "O-001",
+            OrderStatus::Accepted,
+        ))],
         &emitter,
         &state,
     );
 
     // 4. Stale Triggered arrives late (from private WS)
-    dispatch_ws_message(
-        NautilusWsMessage::OrderTriggered(make_order_triggered("O-001")),
+    dispatch_execution_reports(
+        vec![ExecutionReport::Order(make_order_status_report(
+            "O-001",
+            OrderStatus::Triggered,
+        ))],
         &emitter,
         &state,
     );

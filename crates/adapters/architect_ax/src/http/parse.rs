@@ -137,6 +137,7 @@ pub fn parse_funding_rate(
     Ok(FundingRateUpdate::new(
         instrument_id,
         ax_rate.funding_rate,
+        None,
         None, // AX doesn't provide next funding time
         ax_timestamp_ns_to_unix_nanos(ax_rate.timestamp_ns)?,
         ts_init,
@@ -361,7 +362,7 @@ pub fn parse_order_status_report<F>(
     account_id: AccountId,
     instrument: &InstrumentAny,
     ts_init: UnixNanos,
-    cid_resolver: Option<F>,
+    cid_resolver: Option<&F>,
 ) -> anyhow::Result<OrderStatusReport>
 where
     F: Fn(u64) -> Option<ClientOrderId>,
@@ -404,7 +405,6 @@ where
 
     if let Some(cid) = order.cid {
         let client_order_id = cid_resolver
-            .as_ref()
             .and_then(|resolver| resolver(cid))
             .unwrap_or_else(|| cid_to_client_order_id(cid));
         report = report.with_client_order_id(client_order_id);

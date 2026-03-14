@@ -23,6 +23,7 @@ use nautilus_model::{
     data::{
         Bar, BarType, BookOrder, Data, FundingRateUpdate, IndexPriceUpdate, MarkPriceUpdate,
         OrderBookDelta, OrderBookDeltas, QuoteTick, TradeTick, bar::BarSpecification,
+        option_chain::OptionGreeks,
     },
     enums::{
         AggregationSource, AggressorSide, BarAggregation, BookAction, LiquiditySide, OrderSide,
@@ -101,7 +102,7 @@ pub fn parse_trade_msg(
 
 /// Parses a vector of Deribit trade messages into Nautilus `Data` items.
 pub fn parse_trades_data(
-    trades: Vec<DeribitTradeMsg>,
+    trades: &[DeribitTradeMsg],
     instruments_cache: &AHashMap<Ustr, InstrumentAny>,
     ts_init: UnixNanos,
 ) -> Vec<Data> {
@@ -545,10 +546,37 @@ pub fn parse_ticker_to_funding_rate(
     Some(FundingRateUpdate::new(
         instrument_id,
         rate,
+        None, // Deribit exchanges funding every few seconds, instead of in set intervals like other exchanges
         None, // next_funding_ns not available in ticker
         ts_event,
         ts_init,
     ))
+}
+
+/// Parses a Deribit ticker message into a Nautilus `OptionGreeks`.
+///
+/// Returns `None` if the ticker message does not contain Greeks (non-option instrument).
+#[must_use]
+pub fn parse_ticker_to_option_greeks(
+    msg: &DeribitTickerMsg,
+    instrument: &InstrumentAny,
+    ts_init: UnixNanos,
+) -> Option<OptionGreeks> {
+    let deribit_greeks = msg.greeks.as_ref()?;
+    let instrument_id = instrument.id();
+    let ts_event = UnixNanos::new(msg.timestamp * NANOSECONDS_IN_MILLISECOND);
+
+    Some(OptionGreeks {
+        instrument_id,
+        greeks: deribit_greeks.to_greek_values(),
+        mark_iv: msg.mark_iv.and_then(|v| v.to_f64()),
+        bid_iv: msg.bid_iv.and_then(|v| v.to_f64()),
+        ask_iv: msg.ask_iv.and_then(|v| v.to_f64()),
+        underlying_price: msg.underlying_price.and_then(|v| v.to_f64()),
+        open_interest: Some(msg.open_interest.to_f64().unwrap_or(0.0)),
+        ts_event,
+        ts_init,
+    })
 }
 
 /// Parses a Deribit perpetual channel message into a Nautilus `FundingRateUpdate`.
@@ -567,6 +595,7 @@ pub fn parse_perpetual_to_funding_rate(
     FundingRateUpdate::new(
         instrument_id,
         msg.interest,
+        None, // Deribit exchanges funding every few seconds, instead of in set intervals like other exchanges
         None, // next_funding_ns not available in perpetual channel
         ts_event,
         ts_init,
@@ -1581,6 +1610,7 @@ mod tests {
             funding_rate.ts_event,
             UnixNanos::new(1_765_541_474_086_000_000)
         );
+        assert!(funding_rate.interval.is_none());
         assert!(funding_rate.next_funding_ns.is_none()); // Not available in ticker
     }
 

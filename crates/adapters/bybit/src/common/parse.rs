@@ -22,7 +22,11 @@ pub use nautilus_core::serialization::{
     deserialize_decimal_or_zero, deserialize_optional_decimal_or_zero,
     deserialize_optional_decimal_str, deserialize_string_to_u8,
 };
-use nautilus_core::{UUID4, datetime::NANOSECONDS_IN_MILLISECOND, nanos::UnixNanos};
+use nautilus_core::{
+    UUID4,
+    datetime::{NANOSECONDS_IN_MILLISECOND, nanos_to_millis as nanos_to_millis_u64},
+    nanos::UnixNanos,
+};
 use nautilus_model::{
     data::{
         Bar, BarType, BookOrder, FundingRateUpdate, OrderBookDelta, OrderBookDeltas, TradeTick,
@@ -592,13 +596,18 @@ pub fn parse_trade_tick(
 pub fn parse_funding_rate(
     funding: &BybitFunding,
     instrument: &InstrumentAny,
+    interval_millis: Option<i64>,
 ) -> anyhow::Result<FundingRateUpdate> {
     let rate = parse_decimal(&funding.funding_rate, "funding.rate")?;
     let ts_event = parse_millis_timestamp(&funding.funding_rate_timestamp, "funding.timestamp")?;
+    let interval = interval_millis
+        .map(|ms| u16::try_from(ms / 60_000).context("interval milliseconds out of bounds"))
+        .transpose()?;
 
     Ok(FundingRateUpdate::new(
         instrument.id(),
         rate,
+        interval,
         None, // next_funding_ns not provided with historical funding rates
         ts_event,
         ts_event,
@@ -1298,6 +1307,11 @@ pub fn map_time_in_force(
         Some(tif) => Err(tif),
         None => Ok(None),
     }
+}
+
+/// Converts an optional `UnixNanos` timestamp to optional milliseconds.
+pub fn nanos_to_millis(value: Option<UnixNanos>) -> Option<i64> {
+    value.map(|nanos| nanos_to_millis_u64(nanos.as_u64()) as i64)
 }
 
 #[cfg(test)]

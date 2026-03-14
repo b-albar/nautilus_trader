@@ -80,6 +80,11 @@ pub struct BetfairHttpClient {
     retry_manager: RetryManager<BetfairHttpError>,
     cancellation_token: CancellationToken,
     request_id: AtomicU64,
+    url_identity_login: String,
+    url_keep_alive: String,
+    url_betting: String,
+    url_accounts: String,
+    url_navigation: String,
 }
 
 impl BetfairHttpClient {
@@ -94,6 +99,8 @@ impl BetfairHttpClient {
         max_retries: Option<u32>,
         retry_delay_ms: Option<u64>,
         proxy_url: Option<String>,
+        request_rate_per_second: Option<u32>,
+        order_request_rate_per_second: Option<u32>,
     ) -> Result<Self, BetfairHttpError> {
         let retry_config = RetryConfig {
             max_retries: max_retries.unwrap_or(3),
@@ -110,8 +117,11 @@ impl BetfairHttpClient {
             client: HttpClient::new(
                 HashMap::new(),
                 Vec::new(),
-                Self::rate_limiter_quotas(),
-                Self::default_quota(),
+                Self::rate_limiter_quotas(
+                    request_rate_per_second.unwrap_or(5),
+                    order_request_rate_per_second.unwrap_or(20),
+                )?,
+                Self::default_quota(request_rate_per_second.unwrap_or(5))?,
                 timeout_secs,
                 proxy_url,
             )
@@ -121,7 +131,35 @@ impl BetfairHttpClient {
             retry_manager: RetryManager::new(retry_config),
             cancellation_token: CancellationToken::new(),
             request_id: AtomicU64::new(1),
+            url_identity_login: BETFAIR_IDENTITY_LOGIN_URL.to_string(),
+            url_keep_alive: BETFAIR_KEEP_ALIVE_URL.to_string(),
+            url_betting: BETFAIR_BETTING_URL.to_string(),
+            url_accounts: BETFAIR_ACCOUNTS_URL.to_string(),
+            url_navigation: BETFAIR_NAVIGATION_URL.to_string(),
         })
+    }
+
+    /// Overrides the API base URLs (for testing with mock servers).
+    ///
+    /// The keep-alive URL is derived from `identity_login` by replacing the
+    /// path with `/keepAlive`.
+    #[must_use]
+    pub fn with_urls(
+        mut self,
+        identity_login: String,
+        betting: String,
+        accounts: String,
+        navigation: String,
+    ) -> Self {
+        // Derive keep-alive from same host as login
+        if let Some(base) = identity_login.rfind('/') {
+            self.url_keep_alive = format!("{}/keepAlive", &identity_login[..base]);
+        }
+        self.url_identity_login = identity_login;
+        self.url_betting = betting;
+        self.url_accounts = accounts;
+        self.url_navigation = navigation;
+        self
     }
 
     /// Returns the cancellation token for this client.
@@ -162,7 +200,7 @@ impl BetfairHttpClient {
         );
 
         let resp_bytes = self
-            .send_identity(BETFAIR_IDENTITY_LOGIN_URL, form_body.into_bytes())
+            .send_identity(&self.url_identity_login, form_body.into_bytes())
             .await?;
 
         let resp: LoginResponse = serde_json::from_slice(&resp_bytes)?;
@@ -201,9 +239,7 @@ impl BetfairHttpClient {
     ///
     /// Returns an error if the keep-alive request fails.
     pub async fn keep_alive(&self) -> Result<(), BetfairHttpError> {
-        let resp_bytes = self
-            .send_identity(BETFAIR_KEEP_ALIVE_URL, Vec::new())
-            .await?;
+        let resp_bytes = self.send_identity(&self.url_keep_alive, Vec::new()).await?;
 
         let resp: LoginResponse = serde_json::from_slice(&resp_bytes)?;
 
@@ -228,7 +264,7 @@ impl BetfairHttpClient {
         T: DeserializeOwned,
         P: Serialize,
     {
-        self.send_jsonrpc(BETFAIR_BETTING_URL, method, params, false)
+        self.send_jsonrpc(&self.url_betting, method, params, false)
             .await
     }
 
@@ -247,7 +283,7 @@ impl BetfairHttpClient {
         T: DeserializeOwned,
         P: Serialize,
     {
-        self.send_jsonrpc(BETFAIR_BETTING_URL, method, params, true)
+        self.send_jsonrpc(&self.url_betting, method, params, true)
             .await
     }
 
@@ -262,7 +298,7 @@ impl BetfairHttpClient {
         T: DeserializeOwned,
         P: Serialize,
     {
-        self.send_jsonrpc(BETFAIR_ACCOUNTS_URL, method, params, false)
+        self.send_jsonrpc(&self.url_accounts, method, params, false)
             .await
     }
 
@@ -281,7 +317,7 @@ impl BetfairHttpClient {
             .client
             .request(
                 Method::GET,
-                BETFAIR_NAVIGATION_URL.to_string(),
+                self.url_navigation.clone(),
                 None,
                 Some(headers),
                 None,
@@ -302,21 +338,40 @@ impl BetfairHttpClient {
         serde_json::from_slice(&resp.body).map_err(BetfairHttpError::from)
     }
 
-    fn rate_limiter_quotas() -> Vec<(String, Quota)> {
-        vec![
+    fn make_quota(requests_per_second: u32, label: &str) -> Result<Quota, BetfairHttpError> {
+        let rate = NonZeroU32::new(requests_per_second).ok_or_else(|| {
+            BetfairHttpError::InvalidConfiguration(format!("{label} must be greater than zero"))
+        })?;
+
+        Quota::per_second(rate).ok_or_else(|| {
+            BetfairHttpError::InvalidConfiguration(format!("Invalid {label} quota configuration"))
+        })
+    }
+
+    fn rate_limiter_quotas(
+        request_rate_per_second: u32,
+        order_request_rate_per_second: u32,
+    ) -> Result<Vec<(String, Quota)>, BetfairHttpError> {
+        Ok(vec![
             (
                 BETFAIR_RATE_LIMIT_DEFAULT.to_string(),
-                Quota::per_second(NonZeroU32::new(5).expect("non-zero")).expect("valid constant"),
+                Self::make_quota(request_rate_per_second, "request_rate_per_second")?,
             ),
             (
                 BETFAIR_RATE_LIMIT_ORDERS.to_string(),
-                Quota::per_second(NonZeroU32::new(20).expect("non-zero")).expect("valid constant"),
+                Self::make_quota(
+                    order_request_rate_per_second,
+                    "order_request_rate_per_second",
+                )?,
             ),
-        ]
+        ])
     }
 
-    fn default_quota() -> Option<Quota> {
-        Some(Quota::per_second(NonZeroU32::new(5).expect("non-zero")).expect("valid constant"))
+    fn default_quota(request_rate_per_second: u32) -> Result<Option<Quota>, BetfairHttpError> {
+        Ok(Some(Self::make_quota(
+            request_rate_per_second,
+            "request_rate_per_second",
+        )?))
     }
 
     async fn build_headers(
@@ -504,7 +559,7 @@ mod tests {
 
     #[rstest]
     fn test_rate_limiter_quotas_has_expected_keys() {
-        let quotas = BetfairHttpClient::rate_limiter_quotas();
+        let quotas = BetfairHttpClient::rate_limiter_quotas(5, 20).unwrap();
         let keys: Vec<&str> = quotas.iter().map(|(k, _)| k.as_str()).collect();
         assert!(keys.contains(&BETFAIR_RATE_LIMIT_DEFAULT));
         assert!(keys.contains(&BETFAIR_RATE_LIMIT_ORDERS));
@@ -512,7 +567,21 @@ mod tests {
 
     #[rstest]
     fn test_default_quota_is_some() {
-        assert!(BetfairHttpClient::default_quota().is_some());
+        assert!(BetfairHttpClient::default_quota(5).unwrap().is_some());
+    }
+
+    #[rstest]
+    fn test_rate_limiter_quotas_reject_zero_rate_limit() {
+        let result = BetfairHttpClient::rate_limiter_quotas(0, 20);
+
+        assert!(result.is_err());
+        assert!(
+            result
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("request_rate_per_second")
+        );
     }
 
     #[rstest]

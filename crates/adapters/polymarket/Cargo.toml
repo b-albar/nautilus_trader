@@ -92,3 +92,28 @@ nautilus-testkit = { workspace = true }
 
 axum = { workspace = true }
 rstest = { workspace = true }
+
+[[bin]]
+name = "polymarket-updown-markets"
+path = "bin/updown_markets.rs"
+doc = false
+
+[[bin]]
+name = "polymarket-trending-markets"
+path = "bin/trending_markets.rs"
+doc = false
+
+[[bin]]
+name = "polymarket-composite-filter"
+path = "bin/composite_filter.rs"
+doc = false
+
+[[bin]]
+name = "polymarket-search-markets"
+path = "bin/search_markets.rs"
+doc = false
+
+[[bin]]
+name = "polymarket-event-discovery"
+path = "bin/event_discovery.rs"
+doc = false

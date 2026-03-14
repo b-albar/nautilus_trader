@@ -18,6 +18,7 @@
 //! Bybit API reference <https://bybit-exchange.github.io/docs/>.
 
 use std::{
+    cmp::Reverse,
     collections::HashMap,
     fmt::Debug,
     num::NonZeroU32,
@@ -64,8 +65,8 @@ use super::{
         BybitOrderHistoryResponse, BybitOrderbookResponse, BybitPlaceOrderResponse,
         BybitPositionListResponse, BybitServerTimeResponse, BybitSetLeverageResponse,
         BybitSetMarginModeResponse, BybitSetTradingStopResponse, BybitSwitchModeResponse,
-        BybitTickerData, BybitTradeHistoryResponse, BybitTradesResponse,
-        BybitWalletBalanceResponse,
+        BybitTickerData, BybitTickerOption, BybitTickersOptionResponse, BybitTradeHistoryResponse,
+        BybitTradesResponse, BybitWalletBalanceResponse,
     },
     query::{
         BybitAmendOrderParamsBuilder, BybitBatchAmendOrderEntryBuilder,
@@ -2838,6 +2839,44 @@ impl BybitHttpClient {
         }
     }
 
+    /// Requests raw option tickers for a given base coin.
+    ///
+    /// Returns `Vec<BybitTickerOption>` with the raw fields including `underlying_price`.
+    /// Used for fetching forward prices for option chain bootstrap.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the request fails.
+    pub async fn request_option_tickers_raw(
+        &self,
+        base_coin: &str,
+    ) -> anyhow::Result<Vec<BybitTickerOption>> {
+        let params = BybitTickersParams {
+            category: BybitProductType::Option,
+            symbol: None,
+            base_coin: Some(base_coin.to_string()),
+            exp_date: None,
+        };
+        let response: BybitTickersOptionResponse = self.inner.get_tickers(&params).await?;
+        Ok(response.result.list)
+    }
+
+    /// Request raw option tickers with custom params.
+    ///
+    /// This allows fetching a single instrument by setting `symbol` in the params,
+    /// instead of fetching all options for a base coin.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the request fails.
+    pub async fn request_option_tickers_raw_with_params(
+        &self,
+        params: &BybitTickersParams,
+    ) -> anyhow::Result<Vec<BybitTickerOption>> {
+        let response: BybitTickersOptionResponse = self.inner.get_tickers(params).await?;
+        Ok(response.result.list)
+    }
+
     /// Request recent trade tick history for a given symbol.
     ///
     /// Returns the most recent public trades from Bybit's `/v5/market/recent-trade` endpoint.
@@ -2914,11 +2953,10 @@ impl BybitHttpClient {
         let start_ms = start.map(|dt| dt.timestamp_millis());
         let mut seen_timestamps: AHashSet<i64> = AHashSet::new();
 
-        let mut pages: Vec<Vec<FundingRateUpdate>> = Vec::new();
-        let mut total_funding_rates = 0usize;
+        let mut raw_funding_rates = Vec::new();
 
         // Bybit requires endTime when startTime is provided
-        let mut current_end = match (start, end) {
+        let mut current_end_ms = match (start, end) {
             (Some(_), None) => Some(Utc::now().timestamp_millis()),
             _ => end.map(|dt| dt.timestamp_millis()),
         };
@@ -2927,13 +2965,13 @@ impl BybitHttpClient {
             let mut params_builder = BybitFundingParamsBuilder::default();
             params_builder.category(product_type);
             params_builder.symbol(bybit_symbol.raw_symbol().to_string());
-            params_builder.limit(200u32); // Limit for data size per page (maximum for the Bybit API)
+            params_builder.limit(limit.unwrap_or(200).clamp(0, 200)); // 200 is the maximum for the Bybit API
 
             if let Some(start_val) = start_ms {
                 params_builder.start_time(start_val);
             }
 
-            if let Some(end_val) = current_end {
+            if let Some(end_val) = current_end_ms {
                 params_builder.end_time(end_val);
             }
 
@@ -2941,63 +2979,34 @@ impl BybitHttpClient {
             let response = self.inner.get_funding_history(&params).await?;
 
             let funding_rates = response.result.list;
-            if funding_rates.is_empty() {
-                break;
-            }
 
-            let mut funding_rates_with_ts: Vec<(i64, _)> = funding_rates
+            let mut new_funding_rates_with_ts: Vec<(i64, _)> = funding_rates
                 .into_iter()
                 .filter_map(|f| {
-                    f.funding_rate_timestamp
-                        .parse::<i64>()
-                        .ok()
-                        .map(|ts| (ts, f))
+                    let Ok(ts) = f.funding_rate_timestamp.parse::<i64>() else {
+                        return None;
+                    };
+
+                    seen_timestamps.insert(ts).then_some((ts, f))
                 })
                 .collect();
 
-            funding_rates_with_ts.sort_by_key(|(ts, _)| *ts);
+            new_funding_rates_with_ts.sort_by_key(|(ts, _)| Reverse(*ts));
 
-            let has_new = funding_rates_with_ts
-                .iter()
-                .any(|(ts, _)| !seen_timestamps.contains(ts));
+            let earliest_funding_time = match new_funding_rates_with_ts.last() {
+                Some((last_ts, _)) => *last_ts,
+                None => break,
+            };
 
-            if !has_new {
-                break;
-            }
-
-            let mut page_funding_rates = Vec::with_capacity(funding_rates_with_ts.len());
-
-            let mut earliest_ts: Option<i64> = None;
-
-            for (time, funding) in &funding_rates_with_ts {
-                // Track earliest timestamp for pagination
-                if earliest_ts.is_none_or(|ts| *time < ts) {
-                    earliest_ts = Some(*time);
-                }
-
-                if !seen_timestamps.contains(time)
-                    && let Ok(funding_rate) = parse_funding_rate(funding, &instrument)
-                {
-                    page_funding_rates.push(funding_rate);
-                    seen_timestamps.insert(*time);
-                }
-            }
-
-            total_funding_rates += page_funding_rates.len();
-            pages.push(page_funding_rates);
+            let new_funding_rates = new_funding_rates_with_ts.into_iter().map(|(_, f)| f);
+            raw_funding_rates.extend(new_funding_rates);
 
             // Check if we've reached the requested limit
             if let Some(limit_val) = limit
-                && total_funding_rates >= limit_val as usize
+                && raw_funding_rates.len() >= limit_val as usize
             {
                 break;
             }
-
-            // Move end time backwards to get earlier data
-            // Set new end to be 1ms before the first bar of this page
-            let Some(earliest_funding_time) = earliest_ts else {
-                break;
-            };
 
             if let Some(start_val) = start_ms
                 && earliest_funding_time <= start_val
@@ -3005,25 +3014,40 @@ impl BybitHttpClient {
                 break;
             }
 
-            current_end = Some(earliest_funding_time - 1);
+            // Move end time backwards to get earlier data
+            current_end_ms = Some(earliest_funding_time - 1);
         }
 
-        // Reverse pages and flatten to get chronological order (oldest to newest)
-        let mut all_funding_rates: Vec<FundingRateUpdate> = Vec::with_capacity(total_funding_rates);
-        for page in pages.into_iter().rev() {
-            all_funding_rates.extend(page);
-        }
-
-        // If limit is specified and we have more funding rates, return the last N rates (most recent)
         if let Some(limit_val) = limit {
-            let limit_usize = limit_val as usize;
-            if all_funding_rates.len() > limit_usize {
-                let start_idx = all_funding_rates.len() - limit_usize;
-                return Ok(all_funding_rates[start_idx..].to_vec());
-            }
+            raw_funding_rates.truncate(limit_val as usize);
+        }
+        let mut rates: Vec<FundingRateUpdate> = Vec::with_capacity(raw_funding_rates.len());
+
+        for window in raw_funding_rates.windows(2) {
+            let raw = &window[0];
+            let timestamp = raw
+                .funding_rate_timestamp
+                .parse::<i64>()
+                .map_err(|_| anyhow::anyhow!("invalid funding_rate_timestamp"))?;
+            let older_timestamp = window[1]
+                .funding_rate_timestamp
+                .parse::<i64>()
+                .map_err(|_| anyhow::anyhow!("invalid funding_rate_timestamp"))?;
+
+            let interval_millis = timestamp - older_timestamp;
+            let rate = parse_funding_rate(raw, &instrument, Some(interval_millis))?;
+
+            rates.push(rate);
         }
 
-        Ok(all_funding_rates)
+        if let Some(last_raw) = raw_funding_rates.last() {
+            let rate = parse_funding_rate(last_raw, &instrument, None)?;
+            rates.push(rate);
+        }
+
+        rates.reverse();
+
+        Ok(rates)
     }
 
     /// Request an orderbook snapshot for a given symbol.

@@ -185,14 +185,23 @@ pub struct PolymarketWsAuth {
     pub nonce: String,
 }
 
-/// Market-channel subscribe request sent on connect.
+/// Initial market-channel subscribe request sent for a fresh WebSocket session.
 ///
 /// Wire format: `{"assets_ids": [...], "type": "market"}`
 #[derive(Debug, Serialize)]
-pub struct MarketSubscribeRequest {
+pub struct MarketInitialSubscribeRequest {
     pub assets_ids: Vec<String>,
     #[serde(rename = "type")]
     pub msg_type: &'static str,
+}
+
+/// Incremental market-channel subscribe request sent after the initial session subscribe.
+///
+/// Wire format: `{"assets_ids": [...], "operation": "subscribe"}`
+#[derive(Debug, Serialize)]
+pub struct MarketSubscribeRequest {
+    pub assets_ids: Vec<String>,
+    pub operation: &'static str,
 }
 
 /// Market-channel dynamic unsubscribe request sent during an active session.
@@ -242,9 +251,9 @@ mod tests {
         );
         assert_eq!(snap.bids.len(), 3);
         assert_eq!(snap.asks.len(), 3);
-        assert_eq!(snap.bids[0].price, "0.50");
-        assert_eq!(snap.bids[0].size, "200.0");
-        assert_eq!(snap.asks[0].price, "0.51");
+        assert_eq!(snap.bids[0].price, "0.48");
+        assert_eq!(snap.bids[0].size, "500.0");
+        assert_eq!(snap.asks[0].price, "0.53");
         assert_eq!(snap.timestamp, "1703875200000");
     }
 
@@ -297,7 +306,7 @@ mod tests {
         assert_eq!(order.status, PolymarketOrderStatus::Live);
         assert_eq!(order.side, PolymarketOrderSide::Buy);
         assert_eq!(order.order_type, PolymarketOrderType::GTC);
-        assert_eq!(order.outcome, PolymarketOutcome::Yes);
+        assert_eq!(order.outcome, PolymarketOutcome::yes());
         assert_eq!(order.original_size, "100.0");
         assert_eq!(order.size_matched, "0.0");
         assert!(order.associate_trades.is_none());
