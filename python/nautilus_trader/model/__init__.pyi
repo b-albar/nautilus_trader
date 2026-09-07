@@ -1731,6 +1731,8 @@ class Equity:
         taker_fee: decimal.Decimal | None = None,
         tick_scheme: str | None = None,
         info: dict | None = None,
+        size_precision: int | None = None,
+        size_increment: Quantity | None = None,
     ) -> None: ...
     def __hash__(self) -> int: ...
     @property

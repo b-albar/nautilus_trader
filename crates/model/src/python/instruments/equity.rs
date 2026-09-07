@@ -38,7 +38,7 @@ impl Equity {
     /// Represents a generic equity instrument.
     #[expect(clippy::too_many_arguments)]
     #[new]
-    #[pyo3(signature = (instrument_id, raw_symbol, currency, price_precision, price_increment, ts_event, ts_init, isin=None, lot_size=None, max_quantity=None, min_quantity=None, max_price=None, min_price=None, margin_init=None, margin_maint=None, maker_fee=None, taker_fee=None, tick_scheme=None, info=None))]
+    #[pyo3(signature = (instrument_id, raw_symbol, currency, price_precision, price_increment, ts_event, ts_init, isin=None, lot_size=None, max_quantity=None, min_quantity=None, max_price=None, min_price=None, margin_init=None, margin_maint=None, maker_fee=None, taker_fee=None, tick_scheme=None, info=None, size_precision=None, size_increment=None))]
     fn py_new(
         instrument_id: InstrumentId,
         raw_symbol: Symbol,
@@ -59,6 +59,8 @@ impl Equity {
         taker_fee: Option<Decimal>,
         tick_scheme: Option<String>,
         info: Option<Py<PyDict>>,
+        size_precision: Option<u8>,
+        size_increment: Option<Quantity>,
     ) -> PyResult<Self> {
         // Convert Python dict to Params
         let info_map = if let Some(info_dict) = info {
@@ -74,6 +76,8 @@ impl Equity {
             .currency(currency)
             .price_precision(price_precision)
             .price_increment(price_increment)
+            .maybe_size_precision(size_precision)
+            .maybe_size_increment(size_increment)
             .maybe_lot_size(lot_size)
             .maybe_max_quantity(max_quantity)
             .maybe_min_quantity(min_quantity)
@@ -146,7 +150,7 @@ impl Equity {
     #[getter]
     #[pyo3(name = "size_precision")]
     fn py_size_precision(&self) -> u8 {
-        0
+        self.size_precision
     }
 
     #[getter]
@@ -158,7 +162,7 @@ impl Equity {
     #[getter]
     #[pyo3(name = "size_increment")]
     fn py_size_increment(&self) -> Quantity {
-        Quantity::from(1)
+        self.size_increment
     }
 
     #[getter]
@@ -262,6 +266,8 @@ impl Equity {
         dict.set_item("currency", self.currency.code.to_string())?;
         dict.set_item("price_precision", self.price_precision)?;
         dict.set_item("price_increment", self.price_increment.to_string())?;
+        dict.set_item("size_precision", self.size_precision)?;
+        dict.set_item("size_increment", self.size_increment.to_string())?;
         dict.set_item("ts_event", self.ts_event.as_u64())?;
         dict.set_item("ts_init", self.ts_init.as_u64())?;
         // Serialize info dict

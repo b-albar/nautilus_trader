@@ -598,6 +598,8 @@ mod tests {
             .currency(Currency::from("USD"))
             .price_precision(2)
             .price_increment(Price::from("0.01"))
+            .size_precision(6)
+            .size_increment(Quantity::from("0.000001"))
             .lot_size(Quantity::from("100"))
             .max_quantity(Quantity::from("10000"))
             .min_quantity(Quantity::from("1"))
@@ -628,12 +630,48 @@ mod tests {
         // The v1 `from_dict` dropped these quantity constraints (#4461), so check them here
         assert_eq!(decoded_equity.max_quantity, equity.max_quantity);
         assert_eq!(decoded_equity.min_quantity, equity.min_quantity);
+        assert_eq!(decoded_equity.size_precision, equity.size_precision);
+        assert_eq!(decoded_equity.size_increment, equity.size_increment);
 
         // `PartialEq` compares only `id`, so compare every field via its serialized form
         assert_eq!(
             serde_json::to_value(decoded_equity).unwrap(),
             serde_json::to_value(&equity).unwrap(),
         );
+    }
+
+    #[rstest]
+    fn test_decode_legacy_equity_schema_defaults_to_whole_shares() {
+        let instrument = InstrumentAny::Equity(equity_aapl());
+        let metadata = instrument.metadata();
+        let current =
+            InstrumentAny::encode_batch(&metadata, std::slice::from_ref(&instrument)).unwrap();
+        let current_schema = current.schema();
+        let retained: Vec<_> = current_schema
+            .fields()
+            .iter()
+            .enumerate()
+            .filter(|(_, field)| {
+                field.name() != "size_precision" && field.name() != "size_increment"
+            })
+            .collect();
+        let fields = retained
+            .iter()
+            .map(|(_, field)| (*field).clone())
+            .collect::<Vec<_>>();
+        let columns = retained
+            .iter()
+            .map(|(index, _)| current.column(*index).clone())
+            .collect();
+        let schema = Schema::new_with_metadata(fields, current_schema.metadata().clone());
+        let legacy = RecordBatch::try_new(Arc::new(schema), columns).unwrap();
+
+        let decoded = decode_instrument_any_batch(&metadata, &legacy).unwrap();
+        let InstrumentAny::Equity(equity) = &decoded[0] else {
+            panic!("Decoded instrument type mismatch");
+        };
+        assert_eq!(equity.size_precision(), 0);
+        assert_eq!(equity.size_increment(), Quantity::from(1));
     }
 
     #[rstest]

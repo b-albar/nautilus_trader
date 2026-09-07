@@ -37,7 +37,7 @@ use ustr::Ustr;
 use super::KEY_CLASS;
 use crate::arrow::{
     ArrowSchemaProvider, EncodeToRecordBatch, EncodingError, KEY_INSTRUMENT_ID,
-    KEY_PRICE_PRECISION, extract_column, extract_column_by_name_or_index,
+    KEY_PRICE_PRECISION, KEY_SIZE_PRECISION, extract_column, extract_column_by_name_or_index,
     extract_optional_string_column_by_name, optional_ustr_value,
 };
 
@@ -49,6 +49,8 @@ impl ArrowSchemaProvider for Equity {
             Field::new("currency", DataType::Utf8, false),
             Field::new("price_precision", DataType::UInt8, false),
             Field::new("price_increment", DataType::Utf8, false),
+            Field::new("size_precision", DataType::UInt8, false),
+            Field::new("size_increment", DataType::Utf8, false),
             Field::new("lot_size", DataType::Utf8, true), // nullable
             Field::new("isin", DataType::Utf8, true),     // nullable
             Field::new("max_quantity", DataType::Utf8, true), // nullable
@@ -86,6 +88,8 @@ impl EncodeToRecordBatch for Equity {
         let mut currency_builder = StringBuilder::new();
         let mut price_precision_builder = UInt8Array::builder(data.len());
         let mut price_increment_builder = StringBuilder::new();
+        let mut size_precision_builder = UInt8Array::builder(data.len());
+        let mut size_increment_builder = StringBuilder::new();
         let mut lot_size_builder = StringBuilder::new();
         let mut isin_builder = StringBuilder::new();
         let mut max_quantity_builder = StringBuilder::new();
@@ -107,6 +111,8 @@ impl EncodeToRecordBatch for Equity {
             currency_builder.append_value(equity.currency.to_string());
             price_precision_builder.append_value(equity.price_precision);
             price_increment_builder.append_value(equity.price_increment.to_string());
+            size_precision_builder.append_value(equity.size_precision);
+            size_increment_builder.append_value(equity.size_increment.to_string());
 
             if let Some(lot_size) = equity.lot_size {
                 lot_size_builder.append_value(lot_size.to_string());
@@ -186,6 +192,8 @@ impl EncodeToRecordBatch for Equity {
                 Arc::new(currency_builder.finish()),
                 Arc::new(price_precision_builder.finish()),
                 Arc::new(price_increment_builder.finish()),
+                Arc::new(size_precision_builder.finish()),
+                Arc::new(size_increment_builder.finish()),
                 Arc::new(lot_size_builder.finish()),
                 Arc::new(isin_builder.finish()),
                 Arc::new(max_quantity_builder.finish()),
@@ -210,6 +218,10 @@ impl EncodeToRecordBatch for Equity {
         metadata.insert(
             KEY_PRICE_PRECISION.to_string(),
             self.price_precision.to_string(),
+        );
+        metadata.insert(
+            KEY_SIZE_PRECISION.to_string(),
+            self.size_precision.to_string(),
         );
         metadata
     }
@@ -239,30 +251,74 @@ pub fn decode_equity_batch(
         extract_column::<UInt8Array>(cols, "price_precision", 3, DataType::UInt8)?;
     let price_increment_values =
         extract_column::<StringArray>(cols, "price_increment", 4, DataType::Utf8)?;
-    let lot_size_values = cols
-        .get(5)
-        .ok_or_else(|| EncodingError::MissingColumn("lot_size", 5))?;
-    let isin_values = cols
-        .get(6)
-        .ok_or_else(|| EncodingError::MissingColumn("isin", 6))?;
-    let max_quantity_values = cols
-        .get(7)
-        .ok_or_else(|| EncodingError::MissingColumn("max_quantity", 7))?;
-    let min_quantity_values = cols
-        .get(8)
-        .ok_or_else(|| EncodingError::MissingColumn("min_quantity", 8))?;
-    let max_price_values = cols
-        .get(9)
-        .ok_or_else(|| EncodingError::MissingColumn("max_price", 9))?;
-    let min_price_values = cols
-        .get(10)
-        .ok_or_else(|| EncodingError::MissingColumn("min_price", 10))?;
-    let margin_init_values =
-        extract_column::<StringArray>(cols, "margin_init", 11, DataType::Utf8)?;
-    let margin_maint_values =
-        extract_column::<StringArray>(cols, "margin_maint", 12, DataType::Utf8)?;
-    let maker_fee_values = extract_column::<StringArray>(cols, "maker_fee", 13, DataType::Utf8)?;
-    let taker_fee_values = extract_column::<StringArray>(cols, "taker_fee", 14, DataType::Utf8)?;
+    let size_precision_values = record_batch
+        .schema()
+        .index_of("size_precision")
+        .ok()
+        .map(|index| extract_column::<UInt8Array>(cols, "size_precision", index, DataType::UInt8))
+        .transpose()?;
+    let size_increment_values = record_batch
+        .schema()
+        .index_of("size_increment")
+        .ok()
+        .map(|index| extract_column::<StringArray>(cols, "size_increment", index, DataType::Utf8))
+        .transpose()?;
+    let lot_size_values = extract_column_by_name_or_index::<StringArray>(
+        record_batch,
+        "lot_size",
+        5,
+        DataType::Utf8,
+    )?;
+    let isin_values =
+        extract_column_by_name_or_index::<StringArray>(record_batch, "isin", 6, DataType::Utf8)?;
+    let max_quantity_values = extract_column_by_name_or_index::<StringArray>(
+        record_batch,
+        "max_quantity",
+        7,
+        DataType::Utf8,
+    )?;
+    let min_quantity_values = extract_column_by_name_or_index::<StringArray>(
+        record_batch,
+        "min_quantity",
+        8,
+        DataType::Utf8,
+    )?;
+    let max_price_values = extract_column_by_name_or_index::<StringArray>(
+        record_batch,
+        "max_price",
+        9,
+        DataType::Utf8,
+    )?;
+    let min_price_values = extract_column_by_name_or_index::<StringArray>(
+        record_batch,
+        "min_price",
+        10,
+        DataType::Utf8,
+    )?;
+    let margin_init_values = extract_column_by_name_or_index::<StringArray>(
+        record_batch,
+        "margin_init",
+        11,
+        DataType::Utf8,
+    )?;
+    let margin_maint_values = extract_column_by_name_or_index::<StringArray>(
+        record_batch,
+        "margin_maint",
+        12,
+        DataType::Utf8,
+    )?;
+    let maker_fee_values = extract_column_by_name_or_index::<StringArray>(
+        record_batch,
+        "maker_fee",
+        13,
+        DataType::Utf8,
+    )?;
+    let taker_fee_values = extract_column_by_name_or_index::<StringArray>(
+        record_batch,
+        "taker_fee",
+        14,
+        DataType::Utf8,
+    )?;
     let tick_scheme_values = extract_optional_string_column_by_name(record_batch, "tick_scheme")?;
     let info_values =
         extract_column_by_name_or_index::<BinaryArray>(record_batch, "info", 15, DataType::Binary)?;
@@ -291,17 +347,20 @@ pub fn decode_equity_batch(
 
         let price_increment = Price::from_str(price_increment_values.value(i))
             .map_err(|e| EncodingError::ParseError("price_increment", format!("row {i}: {e}")))?;
+        let size_precision = size_precision_values.map_or(0, |values| values.value(i));
+        let size_increment = size_increment_values.map_or_else(
+            || Ok(Quantity::from(1)),
+            |values| {
+                Quantity::from_str(values.value(i)).map_err(|e| {
+                    EncodingError::ParseError("size_increment", format!("row {i}: {e}"))
+                })
+            },
+        )?;
 
         let lot_size = if lot_size_values.is_null(i) {
             None
         } else {
-            let lot_size_str = lot_size_values
-                .as_any()
-                .downcast_ref::<StringArray>()
-                .ok_or_else(|| {
-                    EncodingError::ParseError("lot_size", format!("row {i}: invalid type"))
-                })?
-                .value(i);
+            let lot_size_str = lot_size_values.value(i);
             Some(
                 Quantity::from_str(lot_size_str)
                     .map_err(|e| EncodingError::ParseError("lot_size", format!("row {i}: {e}")))?,
@@ -311,11 +370,7 @@ pub fn decode_equity_batch(
         let isin = if isin_values.is_null(i) {
             None
         } else {
-            let isin_str = isin_values
-                .as_any()
-                .downcast_ref::<StringArray>()
-                .ok_or_else(|| EncodingError::ParseError("isin", format!("row {i}: invalid type")))?
-                .value(i);
+            let isin_str = isin_values.value(i);
             Some(Ustr::from(isin_str))
         };
 
@@ -425,6 +480,8 @@ pub fn decode_equity_batch(
             .currency(currency)
             .price_precision(price_prec)
             .price_increment(price_increment)
+            .size_precision(size_precision)
+            .size_increment(size_increment)
             .maybe_lot_size(lot_size)
             .maybe_max_quantity(max_quantity)
             .maybe_min_quantity(min_quantity)

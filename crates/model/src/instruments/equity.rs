@@ -35,6 +35,10 @@ use crate::{
     },
 };
 
+fn default_size_increment() -> Quantity {
+    Quantity::from(1)
+}
+
 /// Represents a generic equity instrument.
 #[repr(C)]
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -59,6 +63,12 @@ pub struct Equity {
     pub price_precision: u8,
     /// The minimum price increment (tick size).
     pub price_increment: Price,
+    /// The quantity decimal precision.
+    #[serde(default)]
+    pub size_precision: u8,
+    /// The minimum quantity increment.
+    #[serde(default = "default_size_increment")]
+    pub size_increment: Quantity,
     /// The initial (order) margin requirement in percentage of order value.
     pub margin_init: Decimal,
     /// The maintenance (position) margin in percentage of position value.
@@ -97,6 +107,8 @@ impl Equity {
         currency: Currency,
         price_precision: u8,
         price_increment: Price,
+        size_precision: Option<u8>,
+        size_increment: Option<Quantity>,
         lot_size: Option<Quantity>,
         max_quantity: Option<Quantity>,
         min_quantity: Option<Quantity>,
@@ -111,6 +123,8 @@ impl Equity {
         ts_event: UnixNanos,
         ts_init: UnixNanos,
     ) -> CorrectnessResult<Self> {
+        let size_precision = size_precision.unwrap_or_default();
+        let size_increment = size_increment.unwrap_or_else(default_size_increment);
         check_valid_string_ascii_optional(isin.map(|u| u.as_str()), stringify!(isin))?;
         check_equal_u8(
             price_precision,
@@ -119,6 +133,13 @@ impl Equity {
             stringify!(price_increment.precision),
         )?;
         check_positive_price(price_increment, stringify!(price_increment))?;
+        check_equal_u8(
+            size_precision,
+            size_increment.precision,
+            stringify!(size_precision),
+            stringify!(size_increment.precision),
+        )?;
+        check_positive_quantity(size_increment, stringify!(size_increment))?;
         check_tick_scheme(tick_scheme)?;
 
         if let Some(lot_size) = lot_size {
@@ -132,6 +153,8 @@ impl Equity {
             currency,
             price_precision,
             price_increment,
+            size_precision,
+            size_increment,
             lot_size,
             max_quantity,
             min_quantity,
@@ -164,6 +187,8 @@ impl Equity {
         currency: Currency,
         price_precision: u8,
         price_increment: Price,
+        size_precision: Option<u8>,
+        size_increment: Option<Quantity>,
         lot_size: Option<Quantity>,
         max_quantity: Option<Quantity>,
         min_quantity: Option<Quantity>,
@@ -185,6 +210,8 @@ impl Equity {
             currency,
             price_precision,
             price_increment,
+            size_precision,
+            size_increment,
             lot_size,
             max_quantity,
             min_quantity,
@@ -288,7 +315,7 @@ impl Instrument for Equity {
     }
 
     fn size_precision(&self) -> u8 {
-        0
+        self.size_precision
     }
 
     fn price_increment(&self) -> Price {
@@ -296,7 +323,7 @@ impl Instrument for Equity {
     }
 
     fn size_increment(&self) -> Quantity {
-        Quantity::from(1)
+        self.size_increment
     }
 
     fn multiplier(&self) -> Quantity {
@@ -419,6 +446,8 @@ mod tests {
             None,
             None,
             None,
+            None,
+            None,
             0.into(),
             0.into(),
         );
@@ -434,6 +463,8 @@ mod tests {
             Currency::USD(),
             0,
             Price::from("0"),
+            None,
+            None,
             None,
             None,
             None,
@@ -471,6 +502,8 @@ mod tests {
             None,
             None,
             None,
+            None,
+            None,
             0.into(),
             0.into(),
         );
@@ -487,6 +520,8 @@ mod tests {
             Currency::USD(),
             2,
             Price::from("0.01"),
+            None,
+            None,
             Some(Quantity::from("0")),
             None,
             None,
@@ -513,6 +548,42 @@ mod tests {
     }
 
     #[rstest]
+    fn test_fractional_quantity_precision() {
+        let equity = Equity::builder()
+            .instrument_id(InstrumentId::from("AAPL.ALPACA"))
+            .raw_symbol(Symbol::from("AAPL"))
+            .currency(Currency::USD())
+            .price_precision(2)
+            .price_increment(Price::from("0.01"))
+            .size_precision(6)
+            .size_increment(Quantity::from("0.000001"))
+            .ts_event(0.into())
+            .ts_init(0.into())
+            .build()
+            .unwrap();
+
+        assert_eq!(equity.size_precision(), 6);
+        assert_eq!(equity.size_increment(), Quantity::from("0.000001"));
+        assert_eq!(
+            equity.make_qty(0.123_456_7, None),
+            Quantity::from("0.123457")
+        );
+    }
+
+    #[rstest]
+    fn test_deserialize_legacy_equity_defaults_to_whole_shares(equity_aapl: Equity) {
+        let mut value = serde_json::to_value(equity_aapl).unwrap();
+        let object = value.as_object_mut().unwrap();
+        object.remove("size_precision");
+        object.remove("size_increment");
+
+        let equity: Equity = serde_json::from_value(value).unwrap();
+
+        assert_eq!(equity.size_precision(), 0);
+        assert_eq!(equity.size_increment(), Quantity::from(1));
+    }
+
+    #[rstest]
     fn test_builder_matches_new_checked() {
         let positional = Equity::new_checked(
             InstrumentId::from("AAPL.XNAS"),
@@ -521,6 +592,8 @@ mod tests {
             Currency::USD(),
             2,
             Price::from("0.01"),
+            None,
+            None,
             Some(Quantity::from("100")),
             Some(Quantity::from("10000.0")),
             Some(Quantity::from("0.001")),

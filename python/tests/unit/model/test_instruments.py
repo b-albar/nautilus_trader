@@ -20,7 +20,6 @@ import inspect
 from decimal import Decimal
 
 import pytest
-from tests.providers import TestInstrumentProvider
 
 from nautilus_trader.model import AssetClass
 from nautilus_trader.model import BettingInstrument
@@ -50,6 +49,7 @@ from nautilus_trader.model import Symbol
 from nautilus_trader.model import SyntheticInstrument
 from nautilus_trader.model import TokenizedAsset
 from nautilus_trader.model import Venue
+from tests.providers import TestInstrumentProvider
 
 
 GENERIC_INSTRUMENT_TYPES = (
@@ -309,6 +309,8 @@ def test_equity_direct_construction() -> None:
         currency=Currency.from_str("USD"),
         price_precision=2,
         price_increment=Price.from_str("0.01"),
+        size_precision=6,
+        size_increment=Quantity.from_str("0.000001"),
         ts_event=0,
         ts_init=0,
         isin="US0378331005",
@@ -318,6 +320,8 @@ def test_equity_direct_construction() -> None:
     assert equity.type_name == "Equity"
     assert equity.quote_currency == Currency.from_str("USD")
     assert equity.price_precision == 2
+    assert equity.size_precision == 6
+    assert equity.size_increment == Quantity.from_str("0.000001")
 
 
 def test_equity_to_dict_and_from_dict_roundtrip() -> None:
@@ -330,6 +334,8 @@ def test_equity_to_dict_and_from_dict_roundtrip() -> None:
         currency=Currency.from_str("USD"),
         price_precision=2,
         price_increment=Price.from_str("0.01"),
+        size_precision=6,
+        size_increment=Quantity.from_str("0.000001"),
         ts_event=0,
         ts_init=0,
     )
@@ -340,6 +346,8 @@ def test_equity_to_dict_and_from_dict_roundtrip() -> None:
     assert restored.id == equity.id
     assert restored.quote_currency == equity.quote_currency
     assert restored.price_precision == equity.price_precision
+    assert restored.size_precision == equity.size_precision
+    assert restored.size_increment == equity.size_increment
 
 
 def test_futures_contract_construction() -> None:
