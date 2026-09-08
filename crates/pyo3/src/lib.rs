@@ -199,10 +199,13 @@ fn _libnautilus(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_wrapped(submodule)?;
     sys_modules.set_item(format!("{module_name}.{n}"), m.getattr(n)?)?;
 
-    let n = "architect_ax";
-    let submodule = pyo3::wrap_pymodule!(nautilus_architect_ax::python::architect_ax);
-    m.add_wrapped(submodule)?;
-    sys_modules.set_item(format!("{module_name}.{n}"), m.getattr(n)?)?;
+    #[cfg(feature = "full-adapters")]
+    {
+        let n = "architect_ax";
+        let submodule = pyo3::wrap_pymodule!(nautilus_architect_ax::python::architect_ax);
+        m.add_wrapped(submodule)?;
+        sys_modules.set_item(format!("{module_name}.{n}"), m.getattr(n)?)?;
+    }
 
     #[cfg(feature = "betfair")]
     {
@@ -212,85 +215,127 @@ fn _libnautilus(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
         sys_modules.set_item(format!("{module_name}.{n}"), m.getattr(n)?)?;
     }
 
-    let n = "binance";
-    let submodule = pyo3::wrap_pymodule!(nautilus_binance::python::binance);
-    m.add_wrapped(submodule)?;
-    sys_modules.set_item(format!("{module_name}.{n}"), m.getattr(n)?)?;
+    #[cfg(feature = "full-adapters")]
+    {
+        let n = "binance";
+        let submodule = pyo3::wrap_pymodule!(nautilus_binance::python::binance);
+        m.add_wrapped(submodule)?;
+        sys_modules.set_item(format!("{module_name}.{n}"), m.getattr(n)?)?;
+    }
 
-    let n = "bitmex";
-    let submodule = pyo3::wrap_pymodule!(nautilus_bitmex::python::bitmex);
-    m.add_wrapped(submodule)?;
-    sys_modules.set_item(format!("{module_name}.{n}"), m.getattr(n)?)?;
+    #[cfg(feature = "full-adapters")]
+    {
+        let n = "bitmex";
+        let submodule = pyo3::wrap_pymodule!(nautilus_bitmex::python::bitmex);
+        m.add_wrapped(submodule)?;
+        sys_modules.set_item(format!("{module_name}.{n}"), m.getattr(n)?)?;
+    }
 
-    let n = "bybit";
-    let submodule = pyo3::wrap_pymodule!(nautilus_bybit::python::bybit);
-    m.add_wrapped(submodule)?;
-    sys_modules.set_item(format!("{module_name}.{n}"), m.getattr(n)?)?;
+    #[cfg(feature = "full-adapters")]
+    {
+        let n = "bybit";
+        let submodule = pyo3::wrap_pymodule!(nautilus_bybit::python::bybit);
+        m.add_wrapped(submodule)?;
+        sys_modules.set_item(format!("{module_name}.{n}"), m.getattr(n)?)?;
+    }
 
-    let n = "coinbase";
-    let submodule = pyo3::wrap_pymodule!(nautilus_coinbase::python::coinbase);
-    m.add_wrapped(submodule)?;
-    sys_modules.set_item(format!("{module_name}.{n}"), m.getattr(n)?)?;
+    #[cfg(feature = "full-adapters")]
+    {
+        let n = "coinbase";
+        let submodule = pyo3::wrap_pymodule!(nautilus_coinbase::python::coinbase);
+        m.add_wrapped(submodule)?;
+        sys_modules.set_item(format!("{module_name}.{n}"), m.getattr(n)?)?;
+    }
 
     let n = "databento";
     let submodule = pyo3::wrap_pymodule!(nautilus_databento::python::databento);
     m.add_wrapped(submodule)?;
     sys_modules.set_item(format!("{module_name}.{n}"), m.getattr(n)?)?;
 
-    let n = "deribit";
-    let submodule = pyo3::wrap_pymodule!(nautilus_deribit::python::deribit);
-    m.add_wrapped(submodule)?;
-    sys_modules.set_item(format!("{module_name}.{n}"), m.getattr(n)?)?;
+    #[cfg(feature = "full-adapters")]
+    {
+        let n = "deribit";
+        let submodule = pyo3::wrap_pymodule!(nautilus_deribit::python::deribit);
+        m.add_wrapped(submodule)?;
+        sys_modules.set_item(format!("{module_name}.{n}"), m.getattr(n)?)?;
+    }
 
-    let n = "derive";
-    let submodule = pyo3::wrap_pymodule!(nautilus_derive::python::derive);
-    m.add_wrapped(submodule)?;
-    sys_modules.set_item(format!("{module_name}.{n}"), m.getattr(n)?)?;
+    #[cfg(feature = "full-adapters")]
+    {
+        let n = "derive";
+        let submodule = pyo3::wrap_pymodule!(nautilus_derive::python::derive);
+        m.add_wrapped(submodule)?;
+        sys_modules.set_item(format!("{module_name}.{n}"), m.getattr(n)?)?;
+    }
 
-    let n = "dydx";
-    let submodule = pyo3::wrap_pymodule!(nautilus_dydx::python::dydx);
-    m.add_wrapped(submodule)?;
-    sys_modules.set_item(format!("{module_name}.{n}"), m.getattr(n)?)?;
+    #[cfg(feature = "full-adapters")]
+    {
+        let n = "dydx";
+        let submodule = pyo3::wrap_pymodule!(nautilus_dydx::python::dydx);
+        m.add_wrapped(submodule)?;
+        sys_modules.set_item(format!("{module_name}.{n}"), m.getattr(n)?)?;
+    }
 
-    let n = "hyperliquid";
-    let submodule = pyo3::wrap_pymodule!(nautilus_hyperliquid::python::hyperliquid);
-    m.add_wrapped(submodule)?;
-    sys_modules.set_item(format!("{module_name}.{n}"), m.getattr(n)?)?;
+    #[cfg(feature = "full-adapters")]
+    {
+        let n = "hyperliquid";
+        let submodule = pyo3::wrap_pymodule!(nautilus_hyperliquid::python::hyperliquid);
+        m.add_wrapped(submodule)?;
+        sys_modules.set_item(format!("{module_name}.{n}"), m.getattr(n)?)?;
+    }
 
-    let n = "kraken";
-    let submodule = pyo3::wrap_pymodule!(nautilus_kraken::python::kraken);
-    m.add_wrapped(submodule)?;
-    sys_modules.set_item(format!("{module_name}.{n}"), m.getattr(n)?)?;
+    #[cfg(feature = "full-adapters")]
+    {
+        let n = "kraken";
+        let submodule = pyo3::wrap_pymodule!(nautilus_kraken::python::kraken);
+        m.add_wrapped(submodule)?;
+        sys_modules.set_item(format!("{module_name}.{n}"), m.getattr(n)?)?;
+    }
 
-    let n = "lighter";
-    let submodule = pyo3::wrap_pymodule!(nautilus_lighter::python::lighter);
-    m.add_wrapped(submodule)?;
-    sys_modules.set_item(format!("{module_name}.{n}"), m.getattr(n)?)?;
+    #[cfg(feature = "full-adapters")]
+    {
+        let n = "lighter";
+        let submodule = pyo3::wrap_pymodule!(nautilus_lighter::python::lighter);
+        m.add_wrapped(submodule)?;
+        sys_modules.set_item(format!("{module_name}.{n}"), m.getattr(n)?)?;
+    }
 
-    let n = "interactive_brokers";
-    let submodule = pyo3::wrap_pymodule!(nautilus_interactive_brokers::python::interactive_brokers);
-    m.add_wrapped(submodule)?;
-    sys_modules.set_item(format!("{module_name}.{n}"), m.getattr(n)?)?;
+    #[cfg(feature = "full-adapters")]
+    {
+        let n = "interactive_brokers";
+        let submodule = pyo3::wrap_pymodule!(nautilus_interactive_brokers::python::interactive_brokers);
+        m.add_wrapped(submodule)?;
+        sys_modules.set_item(format!("{module_name}.{n}"), m.getattr(n)?)?;
+    }
 
-    let n = "okx";
-    let submodule = pyo3::wrap_pymodule!(nautilus_okx::python::okx);
-    m.add_wrapped(submodule)?;
-    sys_modules.set_item(format!("{module_name}.{n}"), m.getattr(n)?)?;
+    #[cfg(feature = "full-adapters")]
+    {
+        let n = "okx";
+        let submodule = pyo3::wrap_pymodule!(nautilus_okx::python::okx);
+        m.add_wrapped(submodule)?;
+        sys_modules.set_item(format!("{module_name}.{n}"), m.getattr(n)?)?;
+    }
 
-    let n = "polymarket";
-    let submodule = pyo3::wrap_pymodule!(nautilus_polymarket::python::polymarket);
-    m.add_wrapped(submodule)?;
-    sys_modules.set_item(format!("{module_name}.{n}"), m.getattr(n)?)?;
+    #[cfg(feature = "full-adapters")]
+    {
+        let n = "polymarket";
+        let submodule = pyo3::wrap_pymodule!(nautilus_polymarket::python::polymarket);
+        m.add_wrapped(submodule)?;
+        sys_modules.set_item(format!("{module_name}.{n}"), m.getattr(n)?)?;
+    }
 
     let n = "sandbox";
     let submodule = pyo3::wrap_pymodule!(nautilus_sandbox::python::sandbox);
     m.add_wrapped(submodule)?;
     sys_modules.set_item(format!("{module_name}.{n}"), m.getattr(n)?)?;
 
-    let n = "tardis";
-    let submodule = pyo3::wrap_pymodule!(nautilus_tardis::python::tardis);
-    m.add_wrapped(submodule)?;
-    sys_modules.set_item(format!("{module_name}.{n}"), m.getattr(n)?)?;
+    #[cfg(feature = "full-adapters")]
+    {
+        let n = "tardis";
+        let submodule = pyo3::wrap_pymodule!(nautilus_tardis::python::tardis);
+        m.add_wrapped(submodule)?;
+        sys_modules.set_item(format!("{module_name}.{n}"), m.getattr(n)?)?;
+    }
 
     #[cfg(feature = "defi")]
     {
